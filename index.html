@@ -304,6 +304,9 @@
     if (q.preLeave) flags.push('<div class="notice warn">⚠ 值班時數不足，屬「未補先休」：需臨床指導老師、差勤負責老師與組長同意，並主動附相關證明。</div>');
     if (q.warnTotal) flags.push('<div class="notice bad">⚠ 本次實習累計請假將達 ' + (q.totalLeaveHours / 8) + ' 天（已達 3 天示警標準）。</div>');
     if (q.needProof) flags.push('<div class="notice info">此假別須附證明文件（可事後補上傳）。</div>');
+    if ((q.activities || []).length) flags.push('<div class="notice warn">📚 請假期間有學術活動（16:00–17:00）：\n' +
+      q.activities.map(a => '・' + esc(a.date) + ' ' + esc(a.name) + '（' + esc(a.teacher) + '）').join('\n') +
+      '\n假單核准後，系統會通知老師安排補救教學。</div>');
     const ct = (q.clinicalTeachers || []).map(t => esc(t.name) + '（' + esc(t.part) + '）').join('、');
     flags.unshift('<div class="notice info">臨床指導老師（依輪站表）：' + (ct || '—') +
       ((q.clinicalTeachers || []).length > 1 ? '，需全部同意' : '') +
@@ -362,6 +365,8 @@
       '<p style="margin:6px 0">事由：' + esc(l.reason) + '</p>' +
       flags.join('') +
       (l.clinicalTeachers && l.clinicalTeachers.length ? '<p class="muted" style="margin:6px 0 0">臨床指導老師：' + esc(l.clinicalTeachers.join('、')) + '</p>' : '') +
+      ((l.remedials || []).length ? '<div class="pdca-box" style="margin-top:8px"><b>📚 補救教學</b>' + l.remedials.map(r =>
+        esc(r.date) + ' ' + esc(r.name) + '（' + esc(r.teacher) + '）' + (r.status === '已完成' ? ' ✅ 已完成' : ' ⏳ 待老師安排')).join('\n') + '</div>' : '') +
       (l.status === '簽核中' ? '<p class="muted" style="margin:6px 0 0">目前關卡：<b>' + esc(l.step) + '</b>' +
         (l.waiting && l.waiting.length ? '（等待 ' + esc(l.waiting.join('、')) + '）' : '') + '</p>' : '') +
       (log ? '<ul class="log">' + log + '</ul>' : '') +
@@ -537,9 +542,17 @@
     loading('讀取待簽核假單…');
     try {
       const r = await api('pending');
-      const duties = r.duties || [], pdcas = r.pdcas || [];
-      ME.pendingCount = r.leaves.length + duties.length + pdcas.length; buildNav(); $nav.querySelector('[data-tab="approve"]').classList.add('on');
-      if (!r.leaves.length && !duties.length && !pdcas.length) return h('<div class="center">目前沒有待您簽核的項目 👍</div>');
+      const duties = r.duties || [], pdcas = r.pdcas || [], rems = r.remedials || [];
+      ME.pendingCount = r.leaves.length + duties.length + pdcas.length + rems.length; buildNav(); $nav.querySelector('[data-tab="approve"]').classList.add('on');
+      if (!r.leaves.length && !duties.length && !pdcas.length && !rems.length) return h('<div class="center">目前沒有待您簽核的項目 👍</div>');
+      const remHtml = rems.map(m => '<div class="card"><div class="row" style="justify-content:space-between"><h3 style="margin:0">📚 補救教學</h3>' +
+        '<span class="chip ' + (m.overdue ? 'bad' : 'warn') + '">' + (m.overdue ? '已逾期' : '待補救') + '</span></div>' +
+        '<p style="margin:6px 0"><b>' + esc(m.student) + '</b>　缺席 ' + esc(m.date) + '</p>' +
+        '<p style="margin:0 0 4px">' + esc(m.name) + '</p>' +
+        (m.presenter ? '<p class="muted" style="margin:0 0 4px">※ 此生是當天的報告者，請另行安排報告時間</p>' : '') +
+        '<p class="muted" style="margin:0">期限 ' + esc(m.due) + '</p>' +
+        '<input placeholder="備註（選填，例如：12/10 已補講並繳交教學討論單）" data-rmn="' + esc(m.id) + '" style="margin-top:8px">' +
+        '<button class="block" data-rmd="' + esc(m.id) + '" style="margin-top:8px">補救教學已完成</button></div>').join('');
       const pdcaHtml = pdcas.map(p => '<div class="card"><p class="muted" style="margin:0 0 4px">📋 PDCA 改善計畫</p>' + pdcaHead(p, true) + pdcaContentHtml(p) + pdcaLogHtml(p) +
         '<p class="muted" style="margin:8px 0 6px">您的關卡：<b>' + esc(p.step) + '</b></p>' +
         '<textarea placeholder="意見（退回修改時必填）" data-pcm="' + esc(p.id) + '"></textarea>' +
@@ -549,7 +562,7 @@
         (d.note ? '<p class="muted" style="margin:0">說明：' + esc(d.note) + '</p>' : '') +
         '<textarea placeholder="意見（退回時必填）" data-dcm="' + esc(d.id) + '" style="margin-top:8px"></textarea>' +
         '<div class="grid2" style="margin-top:8px"><button data-dok="' + esc(d.id) + '">同意並核發</button><button class="danger" data-dno="' + esc(d.id) + '">退回</button></div></div>').join('');
-      h(pdcaHtml + dutyHtml + r.leaves.map(l => {
+      h(pdcaHtml + dutyHtml + remHtml + r.leaves.map(l => {
         const s = l.summary;
         const info = '<hr><p class="muted" style="margin:0 0 6px">學生累計請假 ' + s.totalLeaveHours + ' 小時（' + s.totalLeaveDays + ' 天）' +
           (s.warnTotal ? ' <span class="chip bad">已達 3 天</span>' : '') + '；' + balText(s.balance) + '</p>' +
@@ -582,6 +595,12 @@
         catch (e) { toast(e.message, 'bad'); }
         renderApprove();
       };
+      $main.querySelectorAll('[data-rmd]').forEach(b => b.onclick = async () => {
+        const note = ($main.querySelector('[data-rmn="' + b.dataset.rmd + '"]') || {}).value || '';
+        try { loading('送出中…'); const x = await api('remedialDone', { remedialId: b.dataset.rmd, note }); toast(x.message, 'ok'); }
+        catch (e) { toast(e.message, 'bad'); }
+        renderApprove();
+      });
       $main.querySelectorAll('[data-pok]').forEach(b => b.onclick = () => pact(b.dataset.pok, '同意'));
       $main.querySelectorAll('[data-pno]').forEach(b => b.onclick = () => pact(b.dataset.pno, '退回'));
       $main.querySelectorAll('[data-dok]').forEach(b => b.onclick = () => dact(b.dataset.dok, '同意'));
@@ -612,6 +631,9 @@
         '<p class="muted">值班餘額為負數表示需補實習時數。</p></div>' +
         '<div class="card"><h3>簽核中假單（' + r.pending.length + '）</h3>' + (pend ? '<ul class="log" style="color:inherit">' + pend + '</ul>' : '<p class="muted">無</p>') + '</div>' +
         '<div class="card"><h3>待補證明（' + r.missingProof.length + '）</h3>' + (proof ? '<ul class="log" style="color:inherit">' + proof + '</ul>' : '<p class="muted">無</p>') + '</div>' +
+        '<div class="card"><h3>待補救教學（' + (r.openRemedials || []).length + '）</h3>' + ((r.openRemedials || []).length ? '<ul class="log" style="color:inherit">' +
+          r.openRemedials.map(m => '<li>' + esc(m.student) + '　' + esc(m.date) + ' ' + esc(m.name) + '　→ ' + esc(m.teacher) +
+            '　期限 ' + esc(m.due) + (m.overdue ? ' <span class="chip bad">已逾期</span>' : '') + '</li>').join('') + '</ul>' : '<p class="muted">無</p>') + '</div>' +
         '<div class="card"><h3>未完成的 PDCA（' + (r.openPdca || []).length + '）</h3>' + ((r.openPdca || []).length ? '<ul class="log" style="color:inherit">' +
           r.openPdca.map(p => '<li>' + esc(p.student) + '　' + esc(p.type) + ' ' + esc(p.date) + '　' + pdcaChip(p.status) +
             (p.status === '簽核中' ? ' 待 <b>' + esc(p.step) + '</b>' : '') + '　期限 ' + esc(p.due) + (p.overdue ? ' <span class="chip bad">已逾期</span>' : '') + '</li>').join('') +
