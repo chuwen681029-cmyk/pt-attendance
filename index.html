@@ -36,7 +36,11 @@
   .chip.bad { background:var(--bad-soft); color:var(--bad); }
   .chip.ok { background:var(--ok-soft); color:var(--ok); }
   .chip.gray { background:#eef1f0; color:var(--muted); }
-  .notice { border-radius:12px; padding:12px 14px; margin:10px 0; font-size:15px; }
+  .notice { border-radius:12px; padding:12px 14px; margin:10px 0; font-size:15px; white-space:pre-line; }
+  .pdca-box { background:var(--bg); border-radius:10px; padding:10px 12px; margin:6px 0; font-size:14px; white-space:pre-wrap; }
+  .pdca-box b { display:block; color:var(--accent); font-size:13px; margin-bottom:2px; }
+  .counter { text-align:right; font-size:13px; color:var(--muted); margin-top:4px; }
+  .counter.ok { color:var(--ok); }
   .notice.warn { background:var(--warn-soft); color:var(--warn); }
   .notice.bad { background:var(--bad-soft); color:var(--bad); }
   .notice.ok { background:var(--ok-soft); color:var(--ok); }
@@ -120,6 +124,10 @@
         doPunch({ k: p.get('k'), s: p.get('s'), t: p.get('t') });
       } else if (p.get('view') === 'approve') {
         switchTab('approve');
+      } else if (p.get('view') === 'pdca' && ME.isStudent) {
+        switchTab('pdca');
+      } else if (ME.isStudent && ME.pdcaTodo) {
+        switchTab('pdca');
       } else {
         switchTab(ME.isStudent ? 'punch' : (ME.isAdmin ? 'overview' : 'approve'));
       }
@@ -145,8 +153,9 @@
   /* ---------- 導覽列 ---------- */
   function tabsFor() {
     const t = [];
-    if (ME.isStudent) t.push(['punch', '⏱', '打卡'], ['leave', '📝', '請假'], ['myleaves', '📄', '我的假單'], ['duty', '🌙', '夜診值班'], ['hours', '⌛', '時數']);
-    t.push(['approve', '✅', '簽核']);
+    if (ME.isStudent) t.push(['punch', '⏱', '打卡'], ['leave', '📝', '請假'], ['myleaves', '📄', '我的假單'], ['pdca', '📋', 'PDCA'], ['duty', '🌙', '夜診值班'], ['hours', '⌛', '時數']);
+    // 只有學生身分的人不需要簽核分頁（已取消代理人關卡）
+    if (ME.profile.roles.some(r => r !== '學生') || ME.pendingCount) t.push(['approve', '✅', '簽核']);
     if (ME.isAdmin) t.push(['overview', '📊', '總覽'], ['ledger', '➕', '登錄時數']);
     return t;
   }
@@ -154,14 +163,15 @@
     $nav.hidden = false;
     $nav.innerHTML = tabsFor().map(([id, ico, name]) =>
       '<button data-tab="' + id + '"><span class="ico">' + ico + '</span>' + name +
-      (id === 'approve' && ME.pendingCount ? '<span class="badge">' + ME.pendingCount + '</span>' : '') + '</button>').join('');
+      (id === 'approve' && ME.pendingCount ? '<span class="badge">' + ME.pendingCount + '</span>' : '') +
+      (id === 'pdca' && ME.pdcaTodo ? '<span class="badge">' + ME.pdcaTodo + '</span>' : '') + '</button>').join('');
     $nav.querySelectorAll('button').forEach(b => b.onclick = () => switchTab(b.dataset.tab));
   }
   function switchTab(id) {
     currentTab = id;
     $nav.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.tab === id));
     window.scrollTo(0, 0);
-    ({ punch: renderPunch, leave: renderLeave, myleaves: renderMyLeaves, duty: renderDuty, hours: renderHours,
+    ({ punch: renderPunch, leave: renderLeave, myleaves: renderMyLeaves, pdca: renderPdca, duty: renderDuty, hours: renderHours,
        approve: renderApprove, overview: renderOverview, ledger: renderLedger }[id] || renderPunch)();
   }
 
@@ -276,9 +286,14 @@
         data.files = await readFiles($('f_files'));
         const r = await api('leaveSubmit', data);
         ME.summary = null; delete cache.hours;
-        h('<div class="card result"><div style="font-size:40px">✅</div><h3>' + esc(r.message) + '</h3>' + quoteHtml(r.quote) +
+        if (r.pdcaDue) { ME.pdcaTodo = (ME.pdcaTodo || 0) + 1; buildNav(); $nav.querySelector('[data-tab="leave"]').classList.add('on'); }
+        h('<div class="card result"><div style="font-size:40px">✅</div><h3>' + esc(r.message) + '</h3>' +
+          (r.pdcaDue ? '<div class="notice warn" style="text-align:left">⚠ 這次未於 3 個工作天前請假，系統已派發 PDCA 改善計畫。\n請於 <b>' + esc(r.pdcaDue) + '</b> 前填寫並完成全部簽章，逾期以遲到論。</div>' +
+            '<button class="block" id="toPdca" style="margin-bottom:10px">立即填寫 PDCA</button>' : '') +
+          quoteHtml(r.quote) +
           '<button class="block ghost" id="toList">查看我的假單</button></div>');
         document.getElementById('toList').onclick = () => switchTab('myleaves');
+        if (r.pdcaDue) document.getElementById('toPdca').onclick = () => switchTab('pdca');
       } catch (e) { toast(e.message, 'bad'); btn.disabled = false; btn.textContent = '送出假單'; }
     };
   }
@@ -382,6 +397,81 @@
     } catch (e) { h('<div class="notice bad">' + esc(e.message) + '</div>'); }
   }
 
+  /* ---------- PDCA 改善計畫 ---------- */
+  const pdcaChip = s => '<span class="chip ' + ({ '已完成': 'ok', '退回修改': 'bad', '待填寫': 'warn', '簽核中': '' }[s] || '') + '">' + esc(s) + '</span>';
+  const PDCA_HINT = {
+    goal: '這次想達成什麼改善？',
+    plan: 'Plan 計畫：依實習規定建立避免違規之目標及過程，確定改善活動計畫之內容。',
+    do: 'Do 執行：如何確切實施、執行改善計畫中的內容。',
+    check: 'Check 檢查：如何定期檢討並稽核改善計畫之執行狀況並報告其結果。',
+    prevAction: 'Action 行動：計畫稽核修定後再執行以持續改進。成功的經驗加以肯定並標準化；失敗的教訓加以總結，以免重現。',
+  };
+  function pdcaContentHtml(p) {
+    const box = (t, v) => v ? '<div class="pdca-box"><b>' + t + '</b>' + esc(v) + '</div>' : '';
+    return box('違規說明', p.explain) + box('改善目標', p.goal) + box('P 計畫', p.plan) + box('D 執行', p.do) + box('C 檢查', p.check) +
+      (p.prev ? box('前一張 PDCA（' + p.prev.date + ' ' + p.prev.type + '）的 A 行動', p.prevAction) : '');
+  }
+  function pdcaLogHtml(p) {
+    const log = (p.log || []).map(x => '<li>' + esc(x.step) + '：' + esc(x.name) + ' ' + esc(x.decision) + ' ' + esc(String(x.time).slice(5, 16)) +
+      (x.comment ? '（' + esc(x.comment) + '）' : '') + '</li>').join('');
+    return log ? '<ul class="log">' + log + '</ul>' : '';
+  }
+  function pdcaHead(p, showStudent) {
+    return '<div class="row" style="justify-content:space-between"><h3 style="margin:0">' + (showStudent ? esc(p.student) + '・' : '') +
+      esc(p.type) + '</h3>' + pdcaChip(p.status) + '</div>' +
+      '<p class="muted" style="margin:6px 0">違規日期 ' + esc(p.date) + '　期限 <b style="color:' + (p.overdue ? 'var(--bad)' : 'inherit') + '">' + esc(p.due) + '</b>' +
+      (p.overdue ? ' <span class="chip bad">已逾期</span>' : '') + '</p>' +
+      '<div class="pdca-box"><b>違規事項</b>' + esc(p.desc) + '</div>';
+  }
+
+  async function renderPdca() {
+    loading('讀取 PDCA…');
+    let r;
+    try { r = await api('myPdca'); } catch (e) { return h('<div class="notice bad">' + esc(e.message) + '</div>'); }
+    ME.pdcaTodo = r.pdcas.filter(p => p.status === '待填寫' || p.status === '退回修改').length; buildNav();
+    $nav.querySelector('[data-tab="pdca"]').classList.add('on');
+    if (!r.pdcas.length) return h('<div class="center">目前沒有需要填寫的 PDCA 👍<br><span class="muted">未於 3 個工作天前請假或遲到時，系統會自動派發。</span></div>');
+    const min = r.minChars;
+    h('<div class="notice info">第一次違規只需寫 P、D、C；重複違規須補寫前一張的 A（行動）。改善目標與 P、D、C 合計需 ' + min +
+      ' 字以上。請於期限內完成填寫及全部簽章，逾期以遲到論。</div>' +
+      r.pdcas.map(p => {
+        const editable = p.status === '待填寫' || p.status === '退回修改';
+        if (!editable) return '<div class="card">' + pdcaHead(p) + pdcaContentHtml(p) +
+          (p.status === '簽核中' ? '<p class="muted" style="margin:6px 0 0">目前關卡：<b>' + esc(p.step) + '</b></p>' : '') + pdcaLogHtml(p) + '</div>';
+        const ta = (k, label, rows) => '<label>' + label + '</label><textarea data-f="' + k + '" data-p="' + esc(p.id) + '" rows="' + (rows || 3) +
+          '" placeholder="' + esc(PDCA_HINT[k] || '') + '">' + esc(p[k] || '') + '</textarea>';
+        const rejected = (p.log || []).filter(x => x.decision === '退回').slice(-1)[0];
+        return '<div class="card">' + pdcaHead(p) +
+          (rejected ? '<div class="notice bad">' + esc(rejected.step + ' ' + rejected.name) + ' 退回：' + esc(rejected.comment) + '</div>' : '') +
+          ta('explain', '違規說明（原因）', 2) +
+          ta('goal', '改善目標', 2) + ta('plan', 'P 計畫') + ta('do', 'D 執行') + ta('check', 'C 檢查') +
+          '<div class="counter" data-cnt="' + esc(p.id) + '"></div>' +
+          (p.prev ? '<hr><div class="pdca-box"><b>前一張 PDCA：' + esc(p.prev.date + ' ' + p.prev.type) + '</b>P：' + esc(p.prev.plan || '') + '</div>' +
+            ta('prevAction', '前一張的 A 行動（重複違規必填）') : '') +
+          '<button class="block" data-sub="' + esc(p.id) + '" style="margin-top:12px">送出簽核</button></div>';
+      }).join(''));
+    const count = id => {
+      const v = k => ($main.querySelector('[data-p="' + id + '"][data-f="' + k + '"]') || {}).value || '';
+      const n = (v('goal') + v('plan') + v('do') + v('check')).replace(/\s/g, '').length;
+      const el = $main.querySelector('[data-cnt="' + id + '"]');
+      if (el) { el.textContent = '改善目標＋P＋D＋C：' + n + ' / ' + min + ' 字'; el.classList.toggle('ok', n >= min); }
+      return n;
+    };
+    $main.querySelectorAll('[data-cnt]').forEach(el => count(el.dataset.cnt));
+    $main.querySelectorAll('textarea[data-p]').forEach(t => t.oninput = () => count(t.dataset.p));
+    $main.querySelectorAll('[data-sub]').forEach(b => b.onclick = async () => {
+      const id = b.dataset.sub;
+      const v = k => (($main.querySelector('[data-p="' + id + '"][data-f="' + k + '"]') || {}).value || '').trim();
+      const data = { pdcaId: id, explain: v('explain'), goal: v('goal'), plan: v('plan'), do: v('do'), check: v('check'), prevAction: v('prevAction') };
+      if (!data.explain || !data.goal || !data.plan || !data.do || !data.check) return toast('每一欄都要填寫', 'warn');
+      if (count(id) < min) return toast('改善目標與 P、D、C 合計需 ' + min + ' 字以上', 'warn');
+      if ($main.querySelector('[data-p="' + id + '"][data-f="prevAction"]') && !data.prevAction) return toast('請補寫前一張的 A 行動', 'warn');
+      b.disabled = true; b.textContent = '送出中…';
+      try { const x = await api('pdcaSubmit', data); toast(x.message, 'ok'); renderPdca(); }
+      catch (e) { toast(e.message, 'bad'); b.disabled = false; b.textContent = '送出簽核'; }
+    });
+  }
+
   /* ---------- 夜診值班（學生） ---------- */
   const dutyChip = s => '<span class="chip ' + ({ '已核發': 'ok', '已退回': 'bad', '已撤回': 'gray' }[s] || 'warn') + '">' + esc(s) + '</span>';
   async function renderDuty() {
@@ -447,18 +537,23 @@
     loading('讀取待簽核假單…');
     try {
       const r = await api('pending');
-      const duties = r.duties || [];
-      ME.pendingCount = r.leaves.length + duties.length; buildNav(); $nav.querySelector('[data-tab="approve"]').classList.add('on');
-      if (!r.leaves.length && !duties.length) return h('<div class="center">目前沒有待您簽核的項目 👍</div>');
+      const duties = r.duties || [], pdcas = r.pdcas || [];
+      ME.pendingCount = r.leaves.length + duties.length + pdcas.length; buildNav(); $nav.querySelector('[data-tab="approve"]').classList.add('on');
+      if (!r.leaves.length && !duties.length && !pdcas.length) return h('<div class="center">目前沒有待您簽核的項目 👍</div>');
+      const pdcaHtml = pdcas.map(p => '<div class="card"><p class="muted" style="margin:0 0 4px">📋 PDCA 改善計畫</p>' + pdcaHead(p, true) + pdcaContentHtml(p) + pdcaLogHtml(p) +
+        '<p class="muted" style="margin:8px 0 6px">您的關卡：<b>' + esc(p.step) + '</b></p>' +
+        '<textarea placeholder="意見（退回修改時必填）" data-pcm="' + esc(p.id) + '"></textarea>' +
+        '<div class="grid2" style="margin-top:8px"><button data-pok="' + esc(p.id) + '">同意</button><button class="danger" data-pno="' + esc(p.id) + '">退回修改</button></div></div>').join('');
       const dutyHtml = duties.map(d => '<div class="card"><div class="row" style="justify-content:space-between"><h3 style="margin:0">🌙 夜診值班確認</h3>' + dutyChip(d.status) + '</div>' +
         '<p style="margin:6px 0"><b>' + esc(d.student) + '</b>　' + esc(d.date) + '　' + d.hours + ' 小時</p>' +
         (d.note ? '<p class="muted" style="margin:0">說明：' + esc(d.note) + '</p>' : '') +
         '<textarea placeholder="意見（退回時必填）" data-dcm="' + esc(d.id) + '" style="margin-top:8px"></textarea>' +
         '<div class="grid2" style="margin-top:8px"><button data-dok="' + esc(d.id) + '">同意並核發</button><button class="danger" data-dno="' + esc(d.id) + '">退回</button></div></div>').join('');
-      h(dutyHtml + r.leaves.map(l => {
+      h(pdcaHtml + dutyHtml + r.leaves.map(l => {
         const s = l.summary;
         const info = '<hr><p class="muted" style="margin:0 0 6px">學生累計請假 ' + s.totalLeaveHours + ' 小時（' + s.totalLeaveDays + ' 天）' +
           (s.warnTotal ? ' <span class="chip bad">已達 3 天</span>' : '') + '；' + balText(s.balance) + '</p>' +
+          (l.late ? '<p class="muted" style="margin:0 0 6px">未於 3 個工作天前申請，請斟酌請假原因的緊急性與特殊性決定是否准假。PDCA：' + (l.pdca ? pdcaChip(l.pdca) : '—') + '</p>' : '') +
           '<p class="muted" style="margin:0 0 6px">您的關卡：<b>' + esc(l.step) + '</b></p>' +
           '<textarea placeholder="意見（退回時必填）" data-c="' + esc(l.id) + '"></textarea>' +
           '<div class="grid2" style="margin-top:8px"><button data-ok="' + esc(l.id) + '">同意</button><button class="danger" data-no="' + esc(l.id) + '">退回</button></div>';
@@ -480,6 +575,15 @@
         catch (e) { toast(e.message, 'bad'); }
         renderApprove();
       };
+      const pact = async (id, decision) => {
+        const comment = $main.querySelector('[data-pcm="' + id + '"]').value;
+        if (decision === '退回' && !comment.trim()) return toast('退回請寫下需修改的地方', 'warn');
+        try { loading('送出中…'); const x = await api('pdcaApprove', { pdcaId: id, decision, comment }); toast(x.message, 'ok'); }
+        catch (e) { toast(e.message, 'bad'); }
+        renderApprove();
+      };
+      $main.querySelectorAll('[data-pok]').forEach(b => b.onclick = () => pact(b.dataset.pok, '同意'));
+      $main.querySelectorAll('[data-pno]').forEach(b => b.onclick = () => pact(b.dataset.pno, '退回'));
       $main.querySelectorAll('[data-dok]').forEach(b => b.onclick = () => dact(b.dataset.dok, '同意'));
       $main.querySelectorAll('[data-dno]').forEach(b => b.onclick = () => dact(b.dataset.dno, '退回'));
     } catch (e) { h('<div class="notice bad">' + esc(e.message) + '</div>'); }
@@ -508,6 +612,10 @@
         '<p class="muted">值班餘額為負數表示需補實習時數。</p></div>' +
         '<div class="card"><h3>簽核中假單（' + r.pending.length + '）</h3>' + (pend ? '<ul class="log" style="color:inherit">' + pend + '</ul>' : '<p class="muted">無</p>') + '</div>' +
         '<div class="card"><h3>待補證明（' + r.missingProof.length + '）</h3>' + (proof ? '<ul class="log" style="color:inherit">' + proof + '</ul>' : '<p class="muted">無</p>') + '</div>' +
+        '<div class="card"><h3>未完成的 PDCA（' + (r.openPdca || []).length + '）</h3>' + ((r.openPdca || []).length ? '<ul class="log" style="color:inherit">' +
+          r.openPdca.map(p => '<li>' + esc(p.student) + '　' + esc(p.type) + ' ' + esc(p.date) + '　' + pdcaChip(p.status) +
+            (p.status === '簽核中' ? ' 待 <b>' + esc(p.step) + '</b>' : '') + '　期限 ' + esc(p.due) + (p.overdue ? ' <span class="chip bad">已逾期</span>' : '') + '</li>').join('') +
+          '</ul>' : '<p class="muted">無</p>') + '</div>' +
         '<div class="card"><h3>近 14 天差勤異常</h3>' + (anomalies ? '<div class="tablewrap"><table><tr><th>日期</th><th>學生</th><th>類型</th><th>說明</th></tr>' + anomalies + '</table></div>' : '<p class="muted">無</p>') + '</div>');
     } catch (e) { h('<div class="notice bad">' + esc(e.message) + '</div>'); }
   }
