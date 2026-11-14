@@ -673,7 +673,7 @@
           '<td style="color:' + (s.summary.balance < 0 ? 'var(--bad)' : 'inherit') + '">' + s.summary.balance + 'h</td></tr>';
       }).join('');
       const anomalies = r.anomalies.map(a => '<tr><td>' + esc(a.date.slice(5)) + '</td><td>' + esc(a.name) + '</td><td><span class="chip warn">' + esc(a.type) + '</span></td><td>' + esc(a.note) + '</td></tr>').join('');
-      const pend = r.pending.map(l => '<li>' + esc(l.student) + '　' + esc(l.type) + ' ' + esc(l.startDate) + '（' + l.hours + 'h）— 待 <b>' + esc((l.waiting && l.waiting.length) ? l.waiting.join('、') : l.step) + '</b></li>').join('');
+      const pend = r.pending.map(l => '<li>' + esc(l.student) + '　' + esc(l.type) + ' ' + esc(l.startDate) + '（' + l.hours + 'h）— 待 <b>' + esc((l.waiting && l.waiting.length) ? l.waiting.join('、') : l.step) + '</b>' + (l.activities ? '<br><span class="muted">學術活動：' + esc(l.activities) + '（核准後建立補救教學）</span>' : '') + '</li>').join('');
       const proof = r.missingProof.map(l => '<li>' + esc(l.student) + '　' + esc(l.type) + ' ' + esc(l.startDate) + '</li>').join('');
       h('<div class="card"><h3>今日（' + esc(r.today) + '）' + (r.working ? '' : '<span class="chip gray">非上班日</span>') + '</h3>' +
         '<div class="tablewrap"><table><tr><th>學生</th><th>今日打卡</th><th>累計請假</th><th>值班餘額</th></tr>' + (rows || '<tr><td colspan="4" class="muted">尚無學生</td></tr>') + '</table></div>' +
