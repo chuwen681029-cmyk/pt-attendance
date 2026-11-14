@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>實習差勤系統</title>
+<style>
+  :root {
+    --bg:#f4f7f6; --card:#ffffff; --ink:#1d2b2a; --muted:#5f716f; --line:#e1e8e6;
+    --accent:#0f766e; --accent-soft:#e3f3f0; --warn:#b45309; --warn-soft:#fff4e5;
+    --bad:#b91c1c; --bad-soft:#fdecec; --ok:#15803d; --ok-soft:#e8f6ec;
+  }
+  * { box-sizing:border-box; }
+  html, body { margin:0; background:var(--bg); color:var(--ink);
+    font-family:"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif; font-size:16px; line-height:1.55; }
+  header { position:sticky; top:0; z-index:5; background:var(--accent); color:#fff; padding:14px 16px; }
+  header .t { font-weight:700; font-size:17px; }
+  header .s { font-size:13px; opacity:.9; }
+  main { padding:16px 16px 96px; max-width:640px; margin:0 auto; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:14px; }
+  .card h3 { margin:0 0 8px; font-size:17px; }
+  .muted { color:var(--muted); font-size:14px; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  label { display:block; font-size:14px; color:var(--muted); margin:12px 0 4px; }
+  input, select, textarea { width:100%; font:inherit; padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:#fff; color:var(--ink); }
+  textarea { min-height:80px; resize:vertical; }
+  button { font:inherit; border:0; border-radius:10px; padding:11px 16px; background:var(--accent); color:#fff; font-weight:600; cursor:pointer; }
+  button.ghost { background:var(--accent-soft); color:var(--accent); }
+  button.danger { background:var(--bad-soft); color:var(--bad); }
+  button.block { width:100%; }
+  button.big { padding:22px; font-size:20px; border-radius:16px; }
+  button:disabled { opacity:.5; }
+  .chip { display:inline-block; font-size:13px; padding:2px 10px; border-radius:999px; background:var(--accent-soft); color:var(--accent); margin:2px 4px 2px 0; }
+  .chip.warn { background:var(--warn-soft); color:var(--warn); }
+  .chip.bad { background:var(--bad-soft); color:var(--bad); }
+  .chip.ok { background:var(--ok-soft); color:var(--ok); }
+  .chip.gray { background:#eef1f0; color:var(--muted); }
+  .notice { border-radius:12px; padding:12px 14px; margin:10px 0; font-size:15px; }
+  .notice.warn { background:var(--warn-soft); color:var(--warn); }
+  .notice.bad { background:var(--bad-soft); color:var(--bad); }
+  .notice.ok { background:var(--ok-soft); color:var(--ok); }
+  .notice.info { background:var(--accent-soft); color:var(--accent); }
+  .stat { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; }
+  .stat div { background:var(--bg); border-radius:12px; padding:12px; }
+  .stat b { display:block; font-size:24px; }
+  .stat span { font-size:13px; color:var(--muted); }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; }
+  .tablewrap { overflow-x:auto; }
+  .log { font-size:13px; color:var(--muted); margin:8px 0 0; padding-left:18px; }
+  nav { position:fixed; bottom:0; left:0; right:0; z-index:5; display:flex; background:#fff; border-top:1px solid var(--line); padding-bottom:env(safe-area-inset-bottom); }
+  nav button { flex:1; background:none; color:var(--muted); border-radius:0; padding:10px 2px 12px; font-size:13px; font-weight:600; position:relative; }
+  nav button.on { color:var(--accent); }
+  nav button .ico { display:block; font-size:20px; line-height:1.2; }
+  .badge { position:absolute; top:4px; right:calc(50% - 22px); background:var(--bad); color:#fff; font-size:11px; border-radius:999px; padding:0 6px; }
+  .center { text-align:center; padding:40px 16px; color:var(--muted); }
+  .result { text-align:center; padding:20px 10px; }
+  .result .big { font-size:40px; font-weight:700; }
+  hr { border:0; border-top:1px solid var(--line); margin:14px 0; }
+</style>
+<script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+</head>
+<body>
+<header><div class="t">物理治療實習差勤系統</div><div class="s" id="who">載入中…</div></header>
+<main id="main"><div class="center">載入中…</div></main>
+<nav id="nav" hidden></nav>
+<script src="config.js"></script>
+<script>
+(function () {
+  const CFG = window.APP_CONFIG;
+  const $main = document.getElementById('main');
+  const $nav = document.getElementById('nav');
+  let idToken = '', ME = null, currentTab = '';
+  const cache = {};
+
+  /* ---------- 工具 ---------- */
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const h = (s) => { $main.innerHTML = s; };
+  const fmtH = n => (Math.round(n * 10) / 10) + ' 小時';
+  const balText = b => b >= 0 ? '可用值班時數 ' + fmtH(b) : '需補實習 ' + fmtH(-b);
+  const statusChip = s => '<span class="chip ' + ({ '已核准': 'ok', '已退回': 'bad', '已撤回': 'gray' }[s] || '') + '">' + esc(s) + '</span>';
+  function loading(msg) { h('<div class="center">' + esc(msg || '處理中…') + '</div>'); }
+  function toast(msg, kind) {
+    const el = document.createElement('div');
+    el.className = 'notice ' + (kind || 'info');
+    el.style.cssText = 'position:fixed;left:16px;right:16px;top:70px;z-index:10;box-shadow:0 6px 20px rgba(0,0,0,.12)';
+    el.textContent = msg; document.body.appendChild(el);
+    setTimeout(() => el.remove(), 3500);
+  }
+
+  async function api(action, data) {
+    const res = await fetch(CFG.GAS_URL, { method: 'POST', body: JSON.stringify(Object.assign({ action, idToken }, data || {})) });
+    const j = await res.json();
+    if (!j.ok) {
+      if (j.code === 'TOKEN_EXPIRED' && !sessionStorage.getItem('pt_reloaded')) {
+        sessionStorage.setItem('pt_reloaded', '1'); location.reload();
+      }
+      throw new Error(j.error || '發生錯誤');
+    }
+    sessionStorage.removeItem('pt_reloaded');
+    return j;
+  }
+
+  /* ---------- 啟動 ---------- */
+  async function boot() {
+    try {
+      await liff.init({ liffId: CFG.LIFF_ID });
+      if (!liff.isLoggedIn()) { liff.login({ redirectUri: location.href }); return; }
+      idToken = liff.getIDToken();
+      ME = await api('me');
+      if (!ME.bound) return renderBind();
+      document.getElementById('who').textContent = ME.profile.name + '（' + ME.profile.roles.join('、') + '）';
+      const p = new URLSearchParams(location.search);
+      buildNav();
+      if (p.get('k') && p.get('s') && p.get('t') && ME.isStudent) {
+        history.replaceState(null, '', location.pathname);
+        switchTab('punch');
+        doPunch({ k: p.get('k'), s: p.get('s'), t: p.get('t') });
+      } else if (p.get('view') === 'approve') {
+        switchTab('approve');
+      } else {
+        switchTab(ME.isStudent ? 'punch' : (ME.isAdmin ? 'overview' : 'approve'));
+      }
+    } catch (e) {
+      h('<div class="card"><h3>無法載入</h3><p>' + esc(e.message) + '</p><button onclick="location.reload()">重新載入</button></div>');
+    }
+  }
+
+  /* ---------- 綁定 ---------- */
+  function renderBind() {
+    document.getElementById('who').textContent = '首次使用，請綁定身分';
+    h('<div class="card"><h3>綁定身分</h3><p class="muted">請輸入差勤負責老師提供的 6 碼綁定碼。綁定後此 LINE 帳號即代表您本人，請勿將綁定碼交給他人。</p>' +
+      '<label>綁定碼</label><input id="code" maxlength="6" autocomplete="off" style="text-transform:uppercase;letter-spacing:.2em;font-size:20px">' +
+      '<div style="margin-top:14px"><button class="block" id="bindBtn">綁定</button></div></div>');
+    document.getElementById('bindBtn').onclick = async () => {
+      const code = document.getElementById('code').value.trim();
+      if (!code) return toast('請輸入綁定碼', 'warn');
+      try { loading('綁定中…'); const r = await api('bind', { code }); toast(r.message, 'ok'); setTimeout(() => location.reload(), 1200); }
+      catch (e) { toast(e.message, 'bad'); renderBind(); }
+    };
+  }
+
+  /* ---------- 導覽列 ---------- */
+  function tabsFor() {
+    const t = [];
+    if (ME.isStudent) t.push(['punch', '⏱', '打卡'], ['leave', '📝', '請假'], ['myleaves', '📄', '我的假單'], ['hours', '⌛', '時數']);
+    t.push(['approve', '✅', '簽核']);
+    if (ME.isAdmin) t.push(['overview', '📊', '總覽'], ['ledger', '➕', '登錄時數']);
+    return t;
+  }
+  function buildNav() {
+    $nav.hidden = false;
+    $nav.innerHTML = tabsFor().map(([id, ico, name]) =>
+      '<button data-tab="' + id + '"><span class="ico">' + ico + '</span>' + name +
+      (id === 'approve' && ME.pendingCount ? '<span class="badge">' + ME.pendingCount + '</span>' : '') + '</button>').join('');
+    $nav.querySelectorAll('button').forEach(b => b.onclick = () => switchTab(b.dataset.tab));
+  }
+  function switchTab(id) {
+    currentTab = id;
+    $nav.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.tab === id));
+    window.scrollTo(0, 0);
+    ({ punch: renderPunch, leave: renderLeave, myleaves: renderMyLeaves, hours: renderHours,
+       approve: renderApprove, overview: renderOverview, ledger: renderLedger }[id] || renderPunch)();
+  }
+
+  /* ---------- 打卡 ---------- */
+  function renderPunch(resultHtml) {
+    const list = (ME.todayPunches || []).map(p =>
+      '<tr><td>' + esc(p.time) + '</td><td>' + esc(p.type) + '</td><td>' + verdictChip(p.verdict) + '</td></tr>').join('');
+    h((resultHtml || '') +
+      '<div class="card"><h3>掃描打卡</h3><p class="muted">請到物理治療辦公室（或虎尾站）的打卡電腦前，按下方按鈕掃描螢幕上的 QR Code。上班 08:00、下班 17:00。</p>' +
+      '<button class="block big" id="scanBtn">📷　掃描打卡</button></div>' +
+      '<div class="card"><h3>今日打卡紀錄</h3>' + (list ? '<table><tr><th>時間</th><th>類型</th><th>判定</th></tr>' + list + '</table>' : '<p class="muted">今天尚未打卡</p>') + '</div>');
+    document.getElementById('scanBtn').onclick = scan;
+  }
+  function verdictChip(v) {
+    const cls = v === '遲到' || v === '早退' ? 'warn' : v === '正常' ? 'ok' : 'gray';
+    return '<span class="chip ' + cls + '">' + esc(v) + '</span>';
+  }
+  async function scan() {
+    if (!liff.isInClient() || !liff.isApiAvailable('scanCodeV2')) return toast('請在手機 LINE 中開啟本頁才能掃描', 'warn');
+    try {
+      const r = await liff.scanCodeV2();
+      if (!r || !r.value) return;
+      let p;
+      try { p = new URL(r.value).searchParams; } catch (e) { return toast('這不是打卡站的 QR Code', 'bad'); }
+      doPunch({ k: p.get('k'), s: p.get('s'), t: p.get('t') });
+    } catch (e) { toast('掃描未完成：' + e.message, 'warn'); }
+  }
+  async function doPunch(q) {
+    loading('打卡中…');
+    try {
+      const r = await api('punch', q);
+      const kind = r.verdict === '遲到' || r.verdict === '早退' ? 'warn' : 'ok';
+      if (!r.duplicate) ME.todayPunches = (ME.todayPunches || []).concat([{ time: r.time, type: r.type, verdict: r.verdict }]);
+      renderPunch('<div class="card result"><div class="big">' + esc(r.time) + '</div><div style="font-size:20px;margin:6px 0">' +
+        esc(r.type) + '　' + verdictChip(r.verdict) + '</div>' +
+        (r.station ? '<div class="muted">' + esc(r.station) + '</div>' : '') +
+        '<div class="notice ' + kind + '">' + esc(r.message) + '</div></div>');
+    } catch (e) {
+      renderPunch('<div class="notice bad">打卡失敗：' + esc(e.message) + '</div>');
+    }
+  }
+
+  /* ---------- 請假 ---------- */
+  function renderLeave() {
+    const m = ME.meta;
+    const types = Object.keys(m.leaveTypes);
+    const opt = (v, t, sel) => '<option value="' + esc(v) + '"' + (sel ? ' selected' : '') + '>' + esc(t) + '</option>';
+    const slots = (sel) => m.slots.map((s, i) => opt(i, s, i === sel)).join('');
+    const proxyNeeded = m.chain.includes('代理人');
+    h('<div class="card"><h3>線上請假</h3>' +
+      '<div class="notice info">請假需於 3 個工作天前提出（病假、防災假除外）。最小單位 2 小時。</div>' +
+      '<label>假別</label><select id="f_type">' + types.map(t => opt(t, t)).join('') + '</select>' +
+      '<div id="subWrap"><label>細項</label><select id="f_sub"></select></div>' +
+      '<div class="grid2"><div><label>開始日期</label><input type="date" id="f_sd" value="' + m.today + '"></div>' +
+      '<div><label>開始時段</label><select id="f_ss">' + slots(0) + '</select></div></div>' +
+      '<div class="grid2"><div><label>結束日期</label><input type="date" id="f_ed" value="' + m.today + '"></div>' +
+      '<div><label>結束時段</label><select id="f_es">' + slots(m.slots.length - 1) + '</select></div></div>' +
+      (proxyNeeded ? '<label>代理人（同學）</label><select id="f_proxy">' + opt('', '請選擇') +
+        (ME.classmates || []).map(c => opt(c.id, c.name)).join('') + '</select>' : '') +
+      '<div id="teacherWrap" hidden><label>臨床指導老師（輪站表查無資料，請自行選擇）</label><select id="f_teacher">' + opt('', '請選擇') +
+        (ME.teachers || []).map(c => opt(c.id, c.name, c.id === ME.defaultTeacherId)).join('') + '</select></div>' +
+      '<label>事由說明</label><textarea id="f_reason" placeholder="請具體說明請假原因"></textarea>' +
+      '<label>證明文件（照片或 PDF，可稍後補上傳）</label><input type="file" id="f_files" multiple accept="image/*,application/pdf">' +
+      '<div id="quote" style="margin-top:14px"></div>' +
+      '<button class="block" id="submitBtn" style="margin-top:8px">送出假單</button></div>');
+
+    const $ = id => document.getElementById(id);
+    function fillSub() {
+      const subs = m.leaveTypes[$('f_type').value].subs || [];
+      $('subWrap').hidden = !subs.length;
+      $('f_sub').innerHTML = subs.map(s => opt(s, s)).join('');
+    }
+    fillSub();
+    let timer = null, seq = 0, lastQuote = null;
+    const form = () => ({
+      type: $('f_type').value, sub: $('subWrap').hidden ? '' : $('f_sub').value,
+      startDate: $('f_sd').value, startSlot: Number($('f_ss').value), endDate: $('f_ed').value, endSlot: Number($('f_es').value),
+    });
+    function requote() {
+      clearTimeout(timer);
+      timer = setTimeout(async () => {
+        const my = ++seq;
+        $('quote').innerHTML = '<p class="muted">試算中…</p>';
+        try {
+          const r = await api('leaveQuote', form());
+          if (my !== seq) return;
+          lastQuote = r.quote;
+          $('quote').innerHTML = quoteHtml(r.quote);
+          $('teacherWrap').hidden = !r.quote.needTeacherSelect;
+        }
+        catch (e) { if (my === seq) { lastQuote = null; $('quote').innerHTML = '<div class="notice bad">' + esc(e.message) + '</div>'; } }
+      }, 400);
+    }
+    $('f_type').onchange = () => { fillSub(); requote(); };
+    ['f_sub', 'f_sd', 'f_ss', 'f_ed', 'f_es'].forEach(id => $(id).onchange = () => {
+      if (id === 'f_sd' && $('f_ed').value < $('f_sd').value) $('f_ed').value = $('f_sd').value;
+      requote();
+    });
+    requote();
+
+    $('submitBtn').onclick = async () => {
+      const data = form();
+      data.reason = $('f_reason').value.trim();
+      data.proxyId = proxyNeeded ? $('f_proxy').value : '';
+      data.teacherId = $('f_teacher').value;
+      if (!data.reason) return toast('請填寫事由說明', 'warn');
+      if (proxyNeeded && !data.proxyId) return toast('請選擇代理人', 'warn');
+      if (!lastQuote) return toast('請先確認請假日期與時段', 'warn');
+      if (lastQuote.needTeacherSelect && !data.teacherId) return toast('請選擇臨床指導老師', 'warn');
+      const btn = $('submitBtn'); btn.disabled = true; btn.textContent = '送出中…';
+      try {
+        data.files = await readFiles($('f_files'));
+        const r = await api('leaveSubmit', data);
+        ME.summary = null; delete cache.hours;
+        h('<div class="card result"><div style="font-size:40px">✅</div><h3>' + esc(r.message) + '</h3>' + quoteHtml(r.quote) +
+          '<button class="block ghost" id="toList">查看我的假單</button></div>');
+        document.getElementById('toList').onclick = () => switchTab('myleaves');
+      } catch (e) { toast(e.message, 'bad'); btn.disabled = false; btn.textContent = '送出假單'; }
+    };
+  }
+
+  function quoteHtml(q) {
+    const flags = [];
+    if (q.late) flags.push('<div class="notice warn">⚠ 未於 3 個工作天前申請：依規定需填寫 PDCA 改善計畫，並由臨床指導老師與組長斟酌是否准假。</div>');
+    if (q.preLeave) flags.push('<div class="notice warn">⚠ 值班時數不足，屬「未補先休」：需臨床指導老師、差勤負責老師與組長同意，並主動附相關證明。</div>');
+    if (q.warnTotal) flags.push('<div class="notice bad">⚠ 本次實習累計請假將達 ' + (q.totalLeaveHours / 8) + ' 天（已達 3 天示警標準）。</div>');
+    if (q.needProof) flags.push('<div class="notice info">此假別須附證明文件（可事後補上傳）。</div>');
+    const ct = (q.clinicalTeachers || []).map(t => esc(t.name) + '（' + esc(t.part) + '）').join('、');
+    flags.unshift('<div class="notice info">臨床指導老師（依輪站表）：' + (ct || '—') +
+      ((q.clinicalTeachers || []).length > 1 ? '，需全部同意' : '') +
+      ((q.rotationMissing || []).length ? '<br>⚠ ' + esc(q.rotationMissing.join('、')) + ' 輪站表查無老師，請在下方選擇' : '') + '</div>');
+    return '<div class="stat">' +
+      '<div><b>' + q.hours + '</b><span>請假時數（' + q.days + ' 天）</span></div>' +
+      '<div><b>' + q.deduction + '</b><span>需扣抵時數</span></div>' +
+      '<div><b>' + q.balance + '</b><span>目前值班時數餘額</span></div>' +
+      '<div><b>' + q.after + '</b><span>扣抵後餘額' + (q.after < 0 ? '（需補實習）' : '') + '</span></div></div>' +
+      '<p class="muted" style="margin:8px 0">' + esc(q.rule) + '</p>' + flags.join('');
+  }
+
+  async function readFiles(input) {
+    const out = [];
+    for (const f of Array.from(input.files || []).slice(0, 5)) {
+      if (f.type.indexOf('image/') === 0) out.push(await compressImage(f));
+      else {
+        if (f.size > 5 * 1024 * 1024) throw new Error(f.name + ' 超過 5MB');
+        out.push({ name: f.name, mime: f.type || 'application/pdf', data: await toBase64(f) });
+      }
+    }
+    return out;
+  }
+  function toBase64(blob) {
+    return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(blob); });
+  }
+  function compressImage(file) {
+    return new Promise((res, rej) => {
+      const img = new Image(), url = URL.createObjectURL(file);
+      img.onload = () => {
+        const max = 1600, k = Math.min(1, max / Math.max(img.width, img.height));
+        const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        res({ name: file.name.replace(/\.[^.]+$/, '') + '.jpg', mime: 'image/jpeg', data: c.toDataURL('image/jpeg', 0.82).split(',')[1] });
+      };
+      img.onerror = () => rej(new Error('無法讀取圖片 ' + file.name));
+      img.src = url;
+    });
+  }
+
+  /* ---------- 我的假單 ---------- */
+  function leaveCard(l, extra) {
+    const flags = [];
+    if (l.late) flags.push('<span class="chip warn">逾期申請</span>');
+    if (l.preLeave) flags.push('<span class="chip warn">未補先休</span>');
+    if (l.proof === '待補') flags.push('<span class="chip bad">待補證明</span>');
+    if (l.proof === '已附') flags.push('<span class="chip ok">已附證明 ' + l.attachments + ' 件</span>');
+    const log = (l.log || []).map(x => '<li>' + esc(x.step) + '：' + esc(x.name) + ' ' + esc(x.decision) + ' ' + esc(String(x.time).slice(5, 16)) +
+      (x.comment ? '（' + esc(x.comment) + '）' : '') + '</li>').join('');
+    return '<div class="card">' +
+      '<div class="row" style="justify-content:space-between"><h3 style="margin:0">' + (l.student && extra ? esc(l.student) + '・' : '') +
+        esc(l.type) + (l.sub ? '／' + esc(l.sub) : '') + '</h3>' + statusChip(l.status) + '</div>' +
+      '<p style="margin:6px 0">' + esc(l.startDate) + ' ' + esc(l.startSlot) + '<br>～ ' + esc(l.endDate) + ' ' + esc(l.endSlot) + '</p>' +
+      '<p class="muted" style="margin:0">' + l.hours + ' 小時・需扣抵 ' + l.deduction + ' 小時（' + esc(l.rule) + '）</p>' +
+      '<p style="margin:6px 0">事由：' + esc(l.reason) + '</p>' +
+      flags.join('') +
+      (l.clinicalTeachers && l.clinicalTeachers.length ? '<p class="muted" style="margin:6px 0 0">臨床指導老師：' + esc(l.clinicalTeachers.join('、')) + '</p>' : '') +
+      (l.status === '簽核中' ? '<p class="muted" style="margin:6px 0 0">目前關卡：<b>' + esc(l.step) + '</b>' +
+        (l.waiting && l.waiting.length ? '（等待 ' + esc(l.waiting.join('、')) + '）' : '') + '</p>' : '') +
+      (log ? '<ul class="log">' + log + '</ul>' : '') +
+      (extra || '') + '</div>';
+  }
+
+  async function renderMyLeaves() {
+    loading('讀取假單…');
+    try {
+      const r = await api('myLeaves');
+      if (!r.leaves.length) return h('<div class="center">目前沒有假單</div>');
+      h(r.leaves.map(l => {
+        let act = '';
+        if (l.proof === '待補' || (l.status !== '已撤回' && l.status !== '已退回')) {
+          act += '<hr><div class="row">';
+          if (l.status !== '已撤回' && l.status !== '已退回')
+            act += '<label style="margin:0;flex:1"><input type="file" multiple accept="image/*,application/pdf" data-up="' + esc(l.id) + '" style="display:none"><span class="chip">📎 上傳證明</span></label>';
+          if (l.status === '簽核中') act += '<button class="danger" data-cancel="' + esc(l.id) + '">撤回</button>';
+          act += '</div>';
+        }
+        return leaveCard(l, act);
+      }).join(''));
+      $main.querySelectorAll('[data-up]').forEach(inp => inp.onchange = async () => {
+        try { loading('上傳中…'); const files = await readFiles(inp); const x = await api('uploadProof', { leaveId: inp.dataset.up, files }); toast(x.message, 'ok'); }
+        catch (e) { toast(e.message, 'bad'); }
+        renderMyLeaves();
+      });
+      $main.querySelectorAll('[data-cancel]').forEach(b => b.onclick = async () => {
+        if (!confirm('確定撤回這張假單？')) return;
+        try { const x = await api('cancelLeave', { leaveId: b.dataset.cancel }); toast(x.message, 'ok'); } catch (e) { toast(e.message, 'bad'); }
+        renderMyLeaves();
+      });
+    } catch (e) { h('<div class="notice bad">' + esc(e.message) + '</div>'); }
+  }
+
+  /* ---------- 我的時數 ---------- */
+  async function renderHours() {
+    loading('讀取時數…');
+    try {
+      const r = await api('myHours');
+      const s = r.summary;
+      const rows = r.ledger.map(x => '<tr><td>' + esc(x.time.slice(0, 10)) + '</td><td>' + esc(x.category) + '</td><td style="text-align:right;color:' +
+        (x.hours < 0 ? 'var(--bad)' : 'var(--ok)') + '">' + (x.hours > 0 ? '+' : '') + x.hours + '</td><td>' + esc(x.note || x.ref) + '</td></tr>').join('');
+      h('<div class="card"><h3>我的時數</h3>' +
+        '<div class="notice ' + (s.balance < 0 ? 'warn' : 'ok') + '" style="font-size:18px;font-weight:700">' + balText(s.balance) + '</div>' +
+        (s.warnTotal ? '<div class="notice bad">⚠ 本次實習累計請假已達 ' + s.totalLeaveDays + ' 天</div>' : '') +
+        '<div class="stat">' +
+          '<div><b>' + s.totalLeaveHours + '</b><span>累計請假時數（' + s.totalLeaveDays + ' 天）</span></div>' +
+          '<div><b>' + s.pendingLeaveHours + '</b><span>其中簽核中</span></div>' +
+          '<div><b>' + s.earned + '</b><span>累計值班時數</span></div>' +
+          '<div><b>' + s.madeUp + '</b><span>已補實習時數</span></div></div></div>' +
+        '<div class="card"><h3>時數明細</h3>' + (rows ? '<div class="tablewrap"><table><tr><th>日期</th><th>類別</th><th style="text-align:right">時數</th><th>說明</th></tr>' + rows + '</table></div>' : '<p class="muted">尚無紀錄</p>') +
+        '<p class="muted">值班時數目前由差勤負責老師登錄；第二階段將改為夜診老師線上核發。</p></div>');
+    } catch (e) { h('<div class="notice bad">' + esc(e.message) + '</div>'); }
+  }
+
+  /* ---------- 簽核 ---------- */
+  async function renderApprove() {
+    loading('讀取待簽核假單…');
+    try {
+      const r = await api('pending');
+      ME.pendingCount = r.leaves.length; buildNav(); $nav.querySelector('[data-tab="approve"]').classList.add('on');
+      if (!r.leaves.length) return h('<div class="center">目前沒有待您簽核的假單 👍</div>');
+      h(r.leaves.map(l => {
+        const s = l.summary;
+        const info = '<hr><p class="muted" style="margin:0 0 6px">學生累計請假 ' + s.totalLeaveHours + ' 小時（' + s.totalLeaveDays + ' 天）' +
+          (s.warnTotal ? ' <span class="chip bad">已達 3 天</span>' : '') + '；' + balText(s.balance) + '</p>' +
+          '<p class="muted" style="margin:0 0 6px">您的關卡：<b>' + esc(l.step) + '</b></p>' +
+          '<textarea placeholder="意見（退回時必填）" data-c="' + esc(l.id) + '"></textarea>' +
+          '<div class="grid2" style="margin-top:8px"><button data-ok="' + esc(l.id) + '">同意</button><button class="danger" data-no="' + esc(l.id) + '">退回</button></div>';
+        return leaveCard(l, info);
+      }).join(''));
+      const act = async (id, decision) => {
+        const comment = $main.querySelector('[data-c="' + id + '"]').value;
+        if (decision === '退回' && !comment.trim()) return toast('退回請填寫原因', 'warn');
+        try { loading('送出中…'); const x = await api('approve', { leaveId: id, decision, comment }); toast(x.message, 'ok'); }
+        catch (e) { toast(e.message, 'bad'); }
+        renderApprove();
+      };
+      $main.querySelectorAll('[data-ok]').forEach(b => b.onclick = () => act(b.dataset.ok, '同意'));
+      $main.querySelectorAll('[data-no]').forEach(b => b.onclick = () => act(b.dataset.no, '退回'));
+    } catch (e) { h('<div class="notice bad">' + esc(e.message) + '</div>'); }
+  }
+
+  /* ---------- 管理總覽 ---------- */
+  async function renderOverview() {
+    loading('讀取總覽…');
+    try {
+      const r = await api('overview');
+      cache.students = r.students;
+      const rows = r.students.map(s => {
+        const today = s.leaveSlots >= 4 ? '<span class="chip gray">全日假</span>' :
+          (s.inTime ? esc(s.inTime) + (s.inVerdict === '遲到' ? ' <span class="chip warn">遲到</span>' : '') : '<span class="muted">未簽到</span>') +
+          (s.outTime ? '<br>' + esc(s.outTime) + (s.outVerdict === '早退' ? ' <span class="chip warn">早退</span>' : '') : '') +
+          (s.leaveSlots ? '<br><span class="chip gray">請假 ' + s.leaveSlots * 2 + 'h</span>' : '');
+        return '<tr><td><b>' + esc(s.name) + '</b><br><span class="muted">' + esc(s.school) + '</span></td><td>' + today + '</td>' +
+          '<td>' + s.summary.totalLeaveHours + 'h' + (s.summary.warnTotal ? ' <span class="chip bad">≥3天</span>' : '') + '</td>' +
+          '<td style="color:' + (s.summary.balance < 0 ? 'var(--bad)' : 'inherit') + '">' + s.summary.balance + 'h</td></tr>';
+      }).join('');
+      const anomalies = r.anomalies.map(a => '<tr><td>' + esc(a.date.slice(5)) + '</td><td>' + esc(a.name) + '</td><td><span class="chip warn">' + esc(a.type) + '</span></td><td>' + esc(a.note) + '</td></tr>').join('');
+      const pend = r.pending.map(l => '<li>' + esc(l.student) + '　' + esc(l.type) + ' ' + esc(l.startDate) + '（' + l.hours + 'h）— 待 <b>' + esc(l.step) + '</b></li>').join('');
+      const proof = r.missingProof.map(l => '<li>' + esc(l.student) + '　' + esc(l.type) + ' ' + esc(l.startDate) + '</li>').join('');
+      h('<div class="card"><h3>今日（' + esc(r.today) + '）' + (r.working ? '' : '<span class="chip gray">非上班日</span>') + '</h3>' +
+        '<div class="tablewrap"><table><tr><th>學生</th><th>今日打卡</th><th>累計請假</th><th>值班餘額</th></tr>' + (rows || '<tr><td colspan="4" class="muted">尚無學生</td></tr>') + '</table></div>' +
+        '<p class="muted">值班餘額為負數表示需補實習時數。</p></div>' +
+        '<div class="card"><h3>簽核中假單（' + r.pending.length + '）</h3>' + (pend ? '<ul class="log" style="color:inherit">' + pend + '</ul>' : '<p class="muted">無</p>') + '</div>' +
+        '<div class="card"><h3>待補證明（' + r.missingProof.length + '）</h3>' + (proof ? '<ul class="log" style="color:inherit">' + proof + '</ul>' : '<p class="muted">無</p>') + '</div>' +
+        '<div class="card"><h3>近 14 天差勤異常</h3>' + (anomalies ? '<div class="tablewrap"><table><tr><th>日期</th><th>學生</th><th>類型</th><th>說明</th></tr>' + anomalies + '</table></div>' : '<p class="muted">無</p>') + '</div>');
+    } catch (e) { h('<div class="notice bad">' + esc(e.message) + '</div>'); }
+  }
+
+  /* ---------- 登錄時數 ---------- */
+  async function renderLedger() {
+    if (!cache.students) {
+      loading('讀取學生名單…');
+      try { cache.students = (await api('overview')).students; } catch (e) { return h('<div class="notice bad">' + esc(e.message) + '</div>'); }
+    }
+    const opt = (v, t) => '<option value="' + esc(v) + '">' + esc(t) + '</option>';
+    h('<div class="card"><h3>登錄時數</h3>' +
+      '<p class="muted">值班：夜診值班完成（每次 2 小時）。補實習：學生完成補實習。手動調整：更正錯誤，可輸入負數。</p>' +
+      '<label>學生</label><select id="l_stu">' + opt('', '請選擇') + cache.students.map(s => opt(s.id, s.name + '（' + balText(s.summary.balance) + '）')).join('') + '</select>' +
+      '<label>類別</label><select id="l_cat">' + ME.meta.ledgerCategories.map(c => opt(c, c)).join('') + '</select>' +
+      '<label>時數</label><input id="l_hours" type="number" step="0.5" value="2">' +
+      '<label>說明（例如：11/12 夜診值班，林老師）</label><input id="l_note">' +
+      '<button class="block" id="l_btn" style="margin-top:14px">登錄</button></div>');
+    document.getElementById('l_btn').onclick = async () => {
+      const personId = document.getElementById('l_stu').value;
+      if (!personId) return toast('請選擇學生', 'warn');
+      try {
+        const x = await api('ledgerAdd', { personId, category: document.getElementById('l_cat').value,
+          hours: Number(document.getElementById('l_hours').value), note: document.getElementById('l_note').value });
+        toast(x.message, 'ok'); cache.students = null; renderLedger();
+      } catch (e) { toast(e.message, 'bad'); }
+    };
+  }
+
+  boot();
+})();
+</script>
+</body>
+</html>
