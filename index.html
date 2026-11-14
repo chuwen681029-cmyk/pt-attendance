@@ -41,6 +41,10 @@
   .pdca-box b { display:block; color:var(--accent); font-size:13px; margin-bottom:2px; }
   .counter { text-align:right; font-size:13px; color:var(--muted); margin-top:4px; }
   .counter.ok { color:var(--ok); }
+  .bfrow { display:grid; grid-template-columns:1.1fr 1fr 1fr; gap:8px; align-items:center; padding:8px 0; border-bottom:1px solid var(--line); }
+  .bfrow input { padding:8px 6px; }
+  .bfhead { font-size:13px; color:var(--muted); font-weight:600; padding-top:14px; }
+  .bfrow .chip { font-size:11px; white-space:nowrap; padding:1px 6px; margin:2px 0 0; }
   .notice.warn { background:var(--warn-soft); color:var(--warn); }
   .notice.bad { background:var(--bad-soft); color:var(--bad); }
   .notice.ok { background:var(--ok-soft); color:var(--ok); }
@@ -156,7 +160,7 @@
     if (ME.isStudent) t.push(['punch', '⏱', '打卡'], ['leave', '📝', '請假'], ['myleaves', '📄', '我的假單'], ['pdca', '📋', 'PDCA'], ['duty', '🌙', '夜診值班'], ['hours', '⌛', '時數']);
     // 只有學生身分的人不需要簽核分頁（已取消代理人關卡）
     if (ME.profile.roles.some(r => r !== '學生') || ME.pendingCount) t.push(['approve', '✅', '簽核']);
-    if (ME.isAdmin) t.push(['overview', '📊', '總覽'], ['ledger', '➕', '登錄時數']);
+    if (ME.isAdmin) t.push(['overview', '📊', '總覽'], ['backfill', '🗂', '補登打卡'], ['ledger', '➕', '登錄時數']);
     return t;
   }
   function buildNav() {
@@ -172,7 +176,7 @@
     $nav.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.tab === id));
     window.scrollTo(0, 0);
     ({ punch: renderPunch, leave: renderLeave, myleaves: renderMyLeaves, pdca: renderPdca, duty: renderDuty, hours: renderHours,
-       approve: renderApprove, overview: renderOverview, ledger: renderLedger }[id] || renderPunch)();
+       approve: renderApprove, overview: renderOverview, backfill: renderBackfill, ledger: renderLedger }[id] || renderPunch)();
   }
 
   /* ---------- 打卡 ---------- */
@@ -640,6 +644,48 @@
           '</ul>' : '<p class="muted">無</p>') + '</div>' +
         '<div class="card"><h3>近 14 天差勤異常</h3>' + (anomalies ? '<div class="tablewrap"><table><tr><th>日期</th><th>學生</th><th>類型</th><th>說明</th></tr>' + anomalies + '</table></div>' : '<p class="muted">無</p>') + '</div>');
     } catch (e) { h('<div class="notice bad">' + esc(e.message) + '</div>'); }
+  }
+
+  /* ---------- 紙本補登打卡 ---------- */
+  async function renderBackfill(dateArg) {
+    const date = dateArg || ME.meta.today;
+    loading('讀取學生名單…');
+    let r;
+    try { r = await api('backfillLoad', { date }); } catch (e) { return h('<div class="notice bad">' + esc(e.message) + '</div>'); }
+    const opt = (v, t) => '<option value="' + esc(v) + '">' + esc(t) + '</option>';
+    const rows = r.students.map(s => {
+      const cell = (k, v) => v
+        ? '<input type="time" value="' + esc(v) + '" disabled title="已有紀錄">'
+        : '<input type="time" data-bf="' + esc(s.id) + '" data-k="' + k + '"' + (s.fullLeave ? ' disabled' : '') + '>';
+      return '<div class="bfrow"><div><b>' + esc(s.name) + '</b>' +
+        (s.fullLeave ? '<br><span class="chip gray">全日請假</span>' : (s.expStart && (s.expStart !== '08:00' || s.expEnd !== '17:00')
+          ? '<br><span class="muted" style="font-size:12px">應 ' + esc(s.expStart) + '–' + esc(s.expEnd) + '</span>' : '')) +
+        '</div>' + cell('in', s.inTime) + cell('out', s.outTime) + '</div>';
+    }).join('');
+    h('<div class="card"><h3>紙本補登打卡</h3>' +
+      '<p class="muted">系統故障時改用紙本簽到退，恢復後照紙本補登。系統會照常判定遲到、早退（遲到一樣派發 PDCA），並把當晚誤判的「未簽到」改為已補登。灰色欄位表示已有紀錄。</p>' +
+      '<label>日期</label><input type="date" id="bf_date" value="' + esc(r.date) + '" max="' + ME.meta.today + '">' +
+      (r.working ? '' : '<div class="notice warn">這天不是上班日</div>') +
+      '<div class="bfrow bfhead"><div>學生</div><div>簽到</div><div>簽退</div></div>' + (rows || '<p class="muted">這天沒有實習中的學生</p>') +
+      '<label>核准的現場老師（紙本簽章者）</label><select id="bf_appr">' + opt('', '請選擇') + (ME.nightTeachers || []).map(t => opt(t.id, t.name)).join('') + '</select>' +
+      '<label>備註（選填）</label><input id="bf_note" placeholder="例如：11/20 系統維護，改用紙本">' +
+      '<button class="block" id="bf_btn" style="margin-top:14px">送出補登</button></div>');
+    const $ = id => document.getElementById(id);
+    $('bf_date').onchange = () => renderBackfill($('bf_date').value);
+    $('bf_btn').onclick = async () => {
+      const map = {};
+      $main.querySelectorAll('[data-bf]').forEach(i => { if (i.value) (map[i.dataset.bf] = map[i.dataset.bf] || { id: i.dataset.bf })[i.dataset.k] = i.value; });
+      const list = Object.values(map);
+      if (!list.length) return toast('請至少填一個時間', 'warn');
+      if (!$('bf_appr').value) return toast('請選擇核准的現場老師', 'warn');
+      if (!confirm('確定補登 ' + list.length + ' 位學生的打卡紀錄？')) return;
+      const btn = $('bf_btn'); btn.disabled = true; btn.textContent = '送出中…';
+      try {
+        const x = await api('backfillSave', { date: $('bf_date').value, approverId: $('bf_appr').value, note: $('bf_note').value, rows: list });
+        await renderBackfill($('bf_date') ? $('bf_date').value : date);
+        $main.insertAdjacentHTML('afterbegin', '<div class="notice ok">' + esc(x.message) + '</div>');
+      } catch (e) { toast(e.message, 'bad'); btn.disabled = false; btn.textContent = '送出補登'; }
+    };
   }
 
   /* ---------- 登錄時數 ---------- */
