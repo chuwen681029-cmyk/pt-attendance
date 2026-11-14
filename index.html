@@ -226,7 +226,9 @@
     const slots = (sel) => m.slots.map((s, i) => opt(i, s, i === sel)).join('');
     const proxyNeeded = m.chain.includes('代理人');
     h('<div class="card"><h3>線上請假</h3>' +
-      '<div class="notice info">請假需於 3 個工作天前提出（病假、生理假除外）。最小單位 2 小時。值班補休需有足夠的夜診值班時數。</div>' +
+      '<div class="notice info">請假需於 3 個工作天前提出（病假、生理假除外）。最小單位 2 小時。值班補休需有足夠的夜診值班時數。' +
+        (m.leaveMode === 'parallel' ? '\n送出後由' + (m.cosign || []).join('、') + '同時會簽，全部同意即核准' +
+          ((m.notifyOnly || []).length ? '；' + m.notifyOnly.join('、') + '知會' : '') + '。' : '') + '</div>' +
       '<label>假別</label><select id="f_type">' + types.map(t => opt(t, t)).join('') + '</select>' +
       '<div id="subWrap"><label>細項</label><select id="f_sub"></select></div>' +
       '<div class="grid2"><div><label>開始日期</label><input type="date" id="f_sd" value="' + m.today + '"></div>' +
@@ -371,7 +373,7 @@
       (l.clinicalTeachers && l.clinicalTeachers.length ? '<p class="muted" style="margin:6px 0 0">臨床指導老師：' + esc(l.clinicalTeachers.join('、')) + '</p>' : '') +
       ((l.remedials || []).length ? '<div class="pdca-box" style="margin-top:8px"><b>📚 補救教學</b>' + l.remedials.map(r =>
         esc(r.date) + ' ' + esc(r.name) + '（' + esc(r.teacher) + '）' + (r.status === '已完成' ? ' ✅ 已完成' : ' ⏳ 待老師安排')).join('\n') + '</div>' : '') +
-      (l.status === '簽核中' ? '<p class="muted" style="margin:6px 0 0">目前關卡：<b>' + esc(l.step) + '</b>' +
+      (l.status === '簽核中' ? '<p class="muted" style="margin:6px 0 0">' + (l.step === '會簽' ? '同時會簽中' : '目前關卡：<b>' + esc(l.step) + '</b>') +
         (l.waiting && l.waiting.length ? '（等待 ' + esc(l.waiting.join('、')) + '）' : '') + '</p>' : '') +
       (log ? '<ul class="log">' + log + '</ul>' : '') +
       (extra || '') + '</div>';
@@ -571,7 +573,7 @@
         const info = '<hr><p class="muted" style="margin:0 0 6px">學生累計請假 ' + s.totalLeaveHours + ' 小時（' + s.totalLeaveDays + ' 天）' +
           (s.warnTotal ? ' <span class="chip bad">已達 3 天</span>' : '') + '；' + balText(s.balance) + '</p>' +
           (l.late ? '<p class="muted" style="margin:0 0 6px">未於 3 個工作天前申請，請斟酌請假原因的緊急性與特殊性決定是否准假。PDCA：' + (l.pdca ? pdcaChip(l.pdca) : '—') + '</p>' : '') +
-          '<p class="muted" style="margin:0 0 6px">您的關卡：<b>' + esc(l.step) + '</b></p>' +
+          '<p class="muted" style="margin:0 0 6px">您的身分：<b>' + esc(l.myRole || l.step) + '</b></p>' +
           '<textarea placeholder="意見（退回時必填）" data-c="' + esc(l.id) + '"></textarea>' +
           '<div class="grid2" style="margin-top:8px"><button data-ok="' + esc(l.id) + '">同意</button><button class="danger" data-no="' + esc(l.id) + '">退回</button></div>';
         return leaveCard(l, info);
@@ -628,7 +630,7 @@
           '<td style="color:' + (s.summary.balance < 0 ? 'var(--bad)' : 'inherit') + '">' + s.summary.balance + 'h</td></tr>';
       }).join('');
       const anomalies = r.anomalies.map(a => '<tr><td>' + esc(a.date.slice(5)) + '</td><td>' + esc(a.name) + '</td><td><span class="chip warn">' + esc(a.type) + '</span></td><td>' + esc(a.note) + '</td></tr>').join('');
-      const pend = r.pending.map(l => '<li>' + esc(l.student) + '　' + esc(l.type) + ' ' + esc(l.startDate) + '（' + l.hours + 'h）— 待 <b>' + esc(l.step) + '</b></li>').join('');
+      const pend = r.pending.map(l => '<li>' + esc(l.student) + '　' + esc(l.type) + ' ' + esc(l.startDate) + '（' + l.hours + 'h）— 待 <b>' + esc((l.waiting && l.waiting.length) ? l.waiting.join('、') : l.step) + '</b></li>').join('');
       const proof = r.missingProof.map(l => '<li>' + esc(l.student) + '　' + esc(l.type) + ' ' + esc(l.startDate) + '</li>').join('');
       h('<div class="card"><h3>今日（' + esc(r.today) + '）' + (r.working ? '' : '<span class="chip gray">非上班日</span>') + '</h3>' +
         '<div class="tablewrap"><table><tr><th>學生</th><th>今日打卡</th><th>累計請假</th><th>值班餘額</th></tr>' + (rows || '<tr><td colspan="4" class="muted">尚無學生</td></tr>') + '</table></div>' +
