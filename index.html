@@ -371,8 +371,12 @@
       '<p style="margin:6px 0">事由：' + esc(l.reason) + '</p>' +
       flags.join('') +
       (l.clinicalTeachers && l.clinicalTeachers.length ? '<p class="muted" style="margin:6px 0 0">臨床指導老師：' + esc(l.clinicalTeachers.join('、')) + '</p>' : '') +
-      ((l.remedials || []).length ? '<div class="pdca-box" style="margin-top:8px"><b>📚 補救教學</b>' + l.remedials.map(r =>
-        esc(r.date) + ' ' + esc(r.name) + '（' + esc(r.teacher) + '）' + (r.status === '已完成' ? ' ✅ 已完成' : ' ⏳ 待老師安排')).join('\n') + '</div>' : '') +
+      ((l.remedials || []).length ? '<div class="pdca-box" style="margin-top:8px;white-space:normal"><b>📚 補救教學（期限內完成以下兩項）</b>' + l.remedials.map(r =>
+        '<div style="margin:6px 0">' + esc(r.date) + ' ' + esc(r.name) + '（' + esc(r.teacher) + ' 老師）' +
+        (r.overdue ? ' <span class="chip bad">已逾期</span>' : '') + '<br>' +
+        (r.teacherDone ? '✅' : '⏳') + ' 老師補救教學　' + (r.studentDone ? '✅' : '⏳') + ' 討論記錄單上傳 E-portfolio' +
+        (r.status === '待補救' && !r.studentDone ? '<br><button class="ghost" style="padding:6px 12px;margin-top:4px" data-up-rem="' + esc(r.id) + '">已上傳 E-portfolio</button>' : '') +
+        '<br><span class="muted">期限 ' + esc(r.due) + '</span></div>').join('') + '</div>' : '') +
       (l.status === '簽核中' ? '<p class="muted" style="margin:6px 0 0">' + (l.step === '會簽' ? '同時會簽中' : '目前關卡：<b>' + esc(l.step) + '</b>') +
         (l.waiting && l.waiting.length ? '（等待 ' + esc(l.waiting.join('、')) + '）' : '') + '</p>' : '') +
       (log ? '<ul class="log">' + log + '</ul>' : '') +
@@ -398,6 +402,11 @@
       $main.querySelectorAll('[data-up]').forEach(inp => inp.onchange = async () => {
         try { loading('上傳中…'); const files = await readFiles(inp); const x = await api('uploadProof', { leaveId: inp.dataset.up, files }); toast(x.message, 'ok'); }
         catch (e) { toast(e.message, 'bad'); }
+        renderMyLeaves();
+      });
+      $main.querySelectorAll('[data-up-rem]').forEach(b => b.onclick = async () => {
+        if (!confirm('確認討論記錄單已上傳 E-portfolio？')) return;
+        try { const x = await api('remedialUploaded', { remedialId: b.dataset.upRem }); toast(x.message, 'ok'); } catch (e) { toast(e.message, 'bad'); }
         renderMyLeaves();
       });
       $main.querySelectorAll('[data-cancel]').forEach(b => b.onclick = async () => {
@@ -639,7 +648,7 @@
         '<div class="card"><h3>待補證明（' + r.missingProof.length + '）</h3>' + (proof ? '<ul class="log" style="color:inherit">' + proof + '</ul>' : '<p class="muted">無</p>') + '</div>' +
         '<div class="card"><h3>待補救教學（' + (r.openRemedials || []).length + '）</h3>' + ((r.openRemedials || []).length ? '<ul class="log" style="color:inherit">' +
           r.openRemedials.map(m => '<li>' + esc(m.student) + '　' + esc(m.date) + ' ' + esc(m.name) + '　→ ' + esc(m.teacher) +
-            '　期限 ' + esc(m.due) + (m.overdue ? ' <span class="chip bad">已逾期</span>' : '') + '</li>').join('') + '</ul>' : '<p class="muted">無</p>') + '</div>' +
+            '　<span class="chip warn">' + esc((m.missing || []).join('、')) + '</span>　期限 ' + esc(m.due) + (m.overdue ? ' <span class="chip bad">已逾期</span>' : '') + '</li>').join('') + '</ul>' : '<p class="muted">無</p>') + '</div>' +
         '<div class="card"><h3>未完成的 PDCA（' + (r.openPdca || []).length + '）</h3>' + ((r.openPdca || []).length ? '<ul class="log" style="color:inherit">' +
           r.openPdca.map(p => '<li>' + esc(p.student) + '　' + esc(p.type) + ' ' + esc(p.date) + '　' + pdcaChip(p.status) +
             (p.status === '簽核中' ? ' 待 <b>' + esc(p.step) + '</b>' : '') + '　期限 ' + esc(p.due) + (p.overdue ? ' <span class="chip bad">已逾期</span>' : '') + '</li>').join('') +
