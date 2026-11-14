@@ -212,7 +212,7 @@
     const slots = (sel) => m.slots.map((s, i) => opt(i, s, i === sel)).join('');
     const proxyNeeded = m.chain.includes('代理人');
     h('<div class="card"><h3>線上請假</h3>' +
-      '<div class="notice info">請假需於 3 個工作天前提出（病假、防災假除外）。最小單位 2 小時。</div>' +
+      '<div class="notice info">請假需於 3 個工作天前提出（病假、生理假除外）。最小單位 2 小時。值班補休需有足夠的夜診值班時數。</div>' +
       '<label>假別</label><select id="f_type">' + types.map(t => opt(t, t)).join('') + '</select>' +
       '<div id="subWrap"><label>細項</label><select id="f_sub"></select></div>' +
       '<div class="grid2"><div><label>開始日期</label><input type="date" id="f_sd" value="' + m.today + '"></div>' +
