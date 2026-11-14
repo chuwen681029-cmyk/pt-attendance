@@ -241,6 +241,7 @@
         (ME.teachers || []).map(c => opt(c.id, c.name, c.id === ME.defaultTeacherId)).join('') + '</select></div>' +
       '<label>事由說明</label><textarea id="f_reason" placeholder="請具體說明請假原因"></textarea>' +
       '<label>證明文件（照片或 PDF，可稍後補上傳）</label><input type="file" id="f_files" multiple accept="image/*,application/pdf">' +
+      '<div id="actWrap"></div>' +
       '<div id="quote" style="margin-top:14px"></div>' +
       '<button class="block" id="submitBtn" style="margin-top:8px">送出假單</button></div>');
 
@@ -252,6 +253,36 @@
     }
     fillSub();
     let timer = null, seq = 0, lastQuote = null;
+    const actState = {};   // 依日期保存學生填的學術活動，重新試算時不會被清掉
+    const teacherOpts = sel => '<option value="">請選擇老師</option>' + (ME.teachers || []).map(t =>
+      '<option value="' + esc(t.id) + '"' + (t.id === sel ? ' selected' : '') + '>' + esc(t.name) + '</option>').join('');
+    function saveActs() {
+      $main.querySelectorAll('[data-act]').forEach(row => {
+        const d = row.dataset.act;
+        actState[d] = { none: row.querySelector('[data-k="none"]').checked,
+          name: row.querySelector('[data-k="name"]').value, teacherId: row.querySelector('[data-k="t"]').value };
+      });
+    }
+    function renderActs(days) {
+      saveActs();
+      const wrap = $('actWrap');
+      if (!days || !days.length) { wrap.innerHTML = ''; return; }
+      wrap.innerHTML = '<label>學術活動（16:00–17:00）</label><div class="notice info" style="margin-top:0">請假涵蓋 15:00–17:00，請逐日確認學術活動。' +
+        '已依行事曆預先帶入；若有調課、換老師請直接修改，活動取消請勾選「沒有學術活動」。核准後系統會通知該老師安排補救教學。</div>' +
+        days.map(d => {
+          const st = actState[d.date] || { none: !d.fromCalendar, name: d.name, teacherId: d.teacherId };
+          return '<div class="pdca-box" data-act="' + esc(d.date) + '" style="white-space:normal">' +
+            '<b>' + esc(d.date) + (d.fromCalendar ? '' : '（行事曆無活動）') + '</b>' +
+            '<label style="margin:4px 0;display:flex;gap:8px;align-items:center;color:inherit"><input type="checkbox" data-k="none" style="width:auto"' + (st.none ? ' checked' : '') + '> 當天沒有學術活動／已調課取消</label>' +
+            '<div data-k="fields"' + (st.none ? ' hidden' : '') + '>' +
+            '<input data-k="name" placeholder="活動名稱，例如：骨科課程-肩關節" value="' + esc(st.name || '') + '" style="margin-bottom:6px">' +
+            '<select data-k="t">' + teacherOpts(st.teacherId) + '</select>' +
+            (d.presenter ? '<p class="muted" style="margin:4px 0 0">※ 行事曆顯示你是當天的報告者</p>' : '') + '</div></div>';
+        }).join('');
+      wrap.querySelectorAll('[data-k="none"]').forEach(cb => cb.onchange = () => {
+        cb.closest('[data-act]').querySelector('[data-k="fields"]').hidden = cb.checked; saveActs();
+      });
+    }
     const form = () => ({
       type: $('f_type').value, sub: $('subWrap').hidden ? '' : $('f_sub').value,
       startDate: $('f_sd').value, startSlot: Number($('f_ss').value), endDate: $('f_ed').value, endSlot: Number($('f_es').value),
@@ -265,6 +296,7 @@
           const r = await api('leaveQuote', form());
           if (my !== seq) return;
           lastQuote = r.quote;
+          renderActs(r.quote.activityDays);
           $('quote').innerHTML = quoteHtml(r.quote);
           $('teacherWrap').hidden = !r.quote.needTeacherSelect;
         }
@@ -283,6 +315,10 @@
       data.reason = $('f_reason').value.trim();
       data.proxyId = proxyNeeded ? $('f_proxy').value : '';
       data.teacherId = $('f_teacher').value;
+      saveActs();
+      data.activities = (lastQuote && lastQuote.activityDays || []).map(d => Object.assign({ date: d.date }, actState[d.date] || {}));
+      const badAct = data.activities.find(a => !a.none && (!String(a.name || '').trim() || !a.teacherId));
+      if (badAct) return toast(badAct.date + ' 請填寫學術活動名稱並選擇老師，或勾選「沒有學術活動」', 'warn');
       if (!data.reason) return toast('請填寫事由說明', 'warn');
       if (proxyNeeded && !data.proxyId) return toast('請選擇代理人', 'warn');
       if (!lastQuote) return toast('請先確認請假日期與時段', 'warn');
@@ -310,9 +346,6 @@
     if (q.preLeave) flags.push('<div class="notice warn">⚠ 值班時數不足，屬「未補先休」：需臨床指導老師、差勤負責老師與組長同意，並主動附相關證明。</div>');
     if (q.warnTotal) flags.push('<div class="notice bad">⚠ 本次實習累計請假將達 ' + (q.totalLeaveHours / 8) + ' 天（已達 3 天示警標準）。</div>');
     if (q.needProof) flags.push('<div class="notice info">此假別須附證明文件（可事後補上傳）。</div>');
-    if ((q.activities || []).length) flags.push('<div class="notice warn">📚 請假期間有學術活動（16:00–17:00）：\n' +
-      q.activities.map(a => '・' + esc(a.date) + ' ' + esc(a.name) + '（' + esc(a.teacher) + '）').join('\n') +
-      '\n假單核准後，系統會通知老師安排補救教學。</div>');
     const ct = (q.clinicalTeachers || []).map(t => esc(t.name) + '（' + esc(t.part) + '）').join('、');
     flags.unshift('<div class="notice info">臨床指導老師（依輪站表）：' + (ct || '—') +
       ((q.clinicalTeachers || []).length > 1 ? '，需全部同意' : '') +
@@ -369,6 +402,7 @@
       '<p style="margin:6px 0">' + esc(l.startDate) + ' ' + esc(l.startSlot) + '<br>～ ' + esc(l.endDate) + ' ' + esc(l.endSlot) + '</p>' +
       '<p class="muted" style="margin:0">' + l.hours + ' 小時・需扣抵 ' + l.deduction + ' 小時（' + esc(l.rule) + '）</p>' +
       '<p style="margin:6px 0">事由：' + esc(l.reason) + '</p>' +
+      (l.activities ? '<div class="pdca-box" style="margin:6px 0"><b>學術活動</b>' + esc(l.activities) + '</div>' : '') +
       flags.join('') +
       (l.clinicalTeachers && l.clinicalTeachers.length ? '<p class="muted" style="margin:6px 0 0">臨床指導老師：' + esc(l.clinicalTeachers.join('、')) + '</p>' : '') +
       ((l.remedials || []).length ? '<div class="pdca-box" style="margin-top:8px;white-space:normal"><b>📚 補救教學（期限內完成以下兩項）</b>' + l.remedials.map(r =>
@@ -634,7 +668,7 @@
           (s.inTime ? esc(s.inTime) + (s.inVerdict === '遲到' ? ' <span class="chip warn">遲到</span>' : '') : '<span class="muted">未簽到</span>') +
           (s.outTime ? '<br>' + esc(s.outTime) + (s.outVerdict === '早退' ? ' <span class="chip warn">早退</span>' : '') : '') +
           (s.leaveSlots ? '<br><span class="chip gray">請假 ' + s.leaveSlots * 2 + 'h</span>' : '');
-        return '<tr><td><b>' + esc(s.name) + '</b><br><span class="muted">' + esc(s.school) + '</span></td><td>' + today + '</td>' +
+        return '<tr><td><b>' + esc(s.name) + '</b></td><td>' + today + '</td>' +
           '<td>' + s.summary.totalLeaveHours + 'h' + (s.summary.warnTotal ? ' <span class="chip bad">≥3天</span>' : '') + '</td>' +
           '<td style="color:' + (s.summary.balance < 0 ? 'var(--bad)' : 'inherit') + '">' + s.summary.balance + 'h</td></tr>';
       }).join('');
