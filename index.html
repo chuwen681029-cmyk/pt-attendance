@@ -51,7 +51,7 @@
   .tablewrap { overflow-x:auto; }
   .log { font-size:13px; color:var(--muted); margin:8px 0 0; padding-left:18px; }
   nav { position:fixed; bottom:0; left:0; right:0; z-index:5; display:flex; background:#fff; border-top:1px solid var(--line); padding-bottom:env(safe-area-inset-bottom); }
-  nav button { flex:1; background:none; color:var(--muted); border-radius:0; padding:10px 2px 12px; font-size:13px; font-weight:600; position:relative; }
+  nav button { flex:1; min-width:0; background:none; color:var(--muted); border-radius:0; padding:10px 0 12px; font-size:12px; font-weight:600; position:relative; white-space:nowrap; letter-spacing:-.02em; }
   nav button.on { color:var(--accent); }
   nav button .ico { display:block; font-size:20px; line-height:1.2; }
   .badge { position:absolute; top:4px; right:calc(50% - 22px); background:var(--bad); color:#fff; font-size:11px; border-radius:999px; padding:0 6px; }
@@ -145,7 +145,7 @@
   /* ---------- 導覽列 ---------- */
   function tabsFor() {
     const t = [];
-    if (ME.isStudent) t.push(['punch', '⏱', '打卡'], ['leave', '📝', '請假'], ['myleaves', '📄', '我的假單'], ['hours', '⌛', '時數']);
+    if (ME.isStudent) t.push(['punch', '⏱', '打卡'], ['leave', '📝', '請假'], ['myleaves', '📄', '我的假單'], ['duty', '🌙', '夜診值班'], ['hours', '⌛', '時數']);
     t.push(['approve', '✅', '簽核']);
     if (ME.isAdmin) t.push(['overview', '📊', '總覽'], ['ledger', '➕', '登錄時數']);
     return t;
@@ -161,7 +161,7 @@
     currentTab = id;
     $nav.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.tab === id));
     window.scrollTo(0, 0);
-    ({ punch: renderPunch, leave: renderLeave, myleaves: renderMyLeaves, hours: renderHours,
+    ({ punch: renderPunch, leave: renderLeave, myleaves: renderMyLeaves, duty: renderDuty, hours: renderHours,
        approve: renderApprove, overview: renderOverview, ledger: renderLedger }[id] || renderPunch)();
   }
 
@@ -382,6 +382,45 @@
     } catch (e) { h('<div class="notice bad">' + esc(e.message) + '</div>'); }
   }
 
+  /* ---------- 夜診值班（學生） ---------- */
+  const dutyChip = s => '<span class="chip ' + ({ '已核發': 'ok', '已退回': 'bad', '已撤回': 'gray' }[s] || 'warn') + '">' + esc(s) + '</span>';
+  async function renderDuty() {
+    const m = ME.meta;
+    const opt = (v, t) => '<option value="' + esc(v) + '">' + esc(t) + '</option>';
+    const minDate = (() => { const d = new Date(m.today + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - m.dutyBackdateDays); return d.toISOString().slice(0, 10); })();
+    h('<div class="card"><h3>夜診值班登錄</h3>' +
+      '<p class="muted">值班結束後登錄，夜診老師確認後核發 ' + m.dutyHours + ' 小時，可用於日後請假扣抵（補休）。</p>' +
+      '<label>學生</label><input value="' + esc(ME.profile.name) + '" disabled>' +
+      '<label>值班日期</label><input type="date" id="d_date" value="' + m.today + '" max="' + m.today + '" min="' + minDate + '">' +
+      '<label>夜診老師</label><select id="d_teacher">' + opt('', '請選擇') + (ME.nightTeachers || []).map(t => opt(t.id, t.name)).join('') + '</select>' +
+      '<label>說明（選填）</label><input id="d_note" placeholder="例如：骨科夜診">' +
+      '<button class="block" id="d_btn" style="margin-top:14px">送出給老師確認</button></div>' +
+      '<div class="card"><h3>我的值班紀錄</h3><div id="d_list"><p class="muted">讀取中…</p></div></div>');
+    const $ = id => document.getElementById(id);
+    $('d_btn').onclick = async () => {
+      const teacherId = $('d_teacher').value;
+      if (!$('d_date').value) return toast('請選擇值班日期', 'warn');
+      if (!teacherId) return toast('請選擇夜診老師', 'warn');
+      const btn = $('d_btn'); btn.disabled = true; btn.textContent = '送出中…';
+      try { const r = await api('dutySubmit', { date: $('d_date').value, teacherId, note: $('d_note').value }); toast(r.message, 'ok'); renderDuty(); }
+      catch (e) { toast(e.message, 'bad'); btn.disabled = false; btn.textContent = '送出給老師確認'; }
+    };
+    try {
+      const r = await api('myDuties');
+      if (!r.duties.length) { $('d_list').innerHTML = '<p class="muted">尚無紀錄</p>'; return; }
+      $('d_list').innerHTML = '<div class="tablewrap"><table><tr><th>日期</th><th>老師</th><th>時數</th><th>狀態</th><th></th></tr>' +
+        r.duties.map(d => '<tr><td>' + esc(d.date) + '</td><td>' + esc(d.teacher) + '</td><td>' + d.hours + '</td><td>' + dutyChip(d.status) +
+          (d.comment ? '<br><span class="muted">' + esc(d.comment) + '</span>' : '') + '</td><td>' +
+          (d.status === '待確認' ? '<button class="danger" style="padding:6px 10px" data-dc="' + esc(d.id) + '">撤回</button>' : '') + '</td></tr>').join('') +
+        '</table></div>';
+      $main.querySelectorAll('[data-dc]').forEach(b => b.onclick = async () => {
+        if (!confirm('確定撤回這筆值班登錄？')) return;
+        try { const x = await api('dutyCancel', { dutyId: b.dataset.dc }); toast(x.message, 'ok'); } catch (e) { toast(e.message, 'bad'); }
+        renderDuty();
+      });
+    } catch (e) { $('d_list').innerHTML = '<div class="notice bad">' + esc(e.message) + '</div>'; }
+  }
+
   /* ---------- 我的時數 ---------- */
   async function renderHours() {
     loading('讀取時數…');
@@ -399,7 +438,7 @@
           '<div><b>' + s.earned + '</b><span>累計值班時數</span></div>' +
           '<div><b>' + s.madeUp + '</b><span>已補實習時數</span></div></div></div>' +
         '<div class="card"><h3>時數明細</h3>' + (rows ? '<div class="tablewrap"><table><tr><th>日期</th><th>類別</th><th style="text-align:right">時數</th><th>說明</th></tr>' + rows + '</table></div>' : '<p class="muted">尚無紀錄</p>') +
-        '<p class="muted">值班時數目前由差勤負責老師登錄；第二階段將改為夜診老師線上核發。</p></div>');
+        '<p class="muted">夜診值班請到「夜診值班」分頁登錄，老師確認後自動核發。</p></div>');
     } catch (e) { h('<div class="notice bad">' + esc(e.message) + '</div>'); }
   }
 
@@ -408,9 +447,15 @@
     loading('讀取待簽核假單…');
     try {
       const r = await api('pending');
-      ME.pendingCount = r.leaves.length; buildNav(); $nav.querySelector('[data-tab="approve"]').classList.add('on');
-      if (!r.leaves.length) return h('<div class="center">目前沒有待您簽核的假單 👍</div>');
-      h(r.leaves.map(l => {
+      const duties = r.duties || [];
+      ME.pendingCount = r.leaves.length + duties.length; buildNav(); $nav.querySelector('[data-tab="approve"]').classList.add('on');
+      if (!r.leaves.length && !duties.length) return h('<div class="center">目前沒有待您簽核的項目 👍</div>');
+      const dutyHtml = duties.map(d => '<div class="card"><div class="row" style="justify-content:space-between"><h3 style="margin:0">🌙 夜診值班確認</h3>' + dutyChip(d.status) + '</div>' +
+        '<p style="margin:6px 0"><b>' + esc(d.student) + '</b>　' + esc(d.date) + '　' + d.hours + ' 小時</p>' +
+        (d.note ? '<p class="muted" style="margin:0">說明：' + esc(d.note) + '</p>' : '') +
+        '<textarea placeholder="意見（退回時必填）" data-dcm="' + esc(d.id) + '" style="margin-top:8px"></textarea>' +
+        '<div class="grid2" style="margin-top:8px"><button data-dok="' + esc(d.id) + '">同意並核發</button><button class="danger" data-dno="' + esc(d.id) + '">退回</button></div></div>').join('');
+      h(dutyHtml + r.leaves.map(l => {
         const s = l.summary;
         const info = '<hr><p class="muted" style="margin:0 0 6px">學生累計請假 ' + s.totalLeaveHours + ' 小時（' + s.totalLeaveDays + ' 天）' +
           (s.warnTotal ? ' <span class="chip bad">已達 3 天</span>' : '') + '；' + balText(s.balance) + '</p>' +
@@ -428,6 +473,15 @@
       };
       $main.querySelectorAll('[data-ok]').forEach(b => b.onclick = () => act(b.dataset.ok, '同意'));
       $main.querySelectorAll('[data-no]').forEach(b => b.onclick = () => act(b.dataset.no, '退回'));
+      const dact = async (id, decision) => {
+        const comment = $main.querySelector('[data-dcm="' + id + '"]').value;
+        if (decision === '退回' && !comment.trim()) return toast('退回請填寫原因', 'warn');
+        try { loading('送出中…'); const x = await api('dutyApprove', { dutyId: id, decision, comment }); toast(x.message, 'ok'); }
+        catch (e) { toast(e.message, 'bad'); }
+        renderApprove();
+      };
+      $main.querySelectorAll('[data-dok]').forEach(b => b.onclick = () => dact(b.dataset.dok, '同意'));
+      $main.querySelectorAll('[data-dno]').forEach(b => b.onclick = () => dact(b.dataset.dno, '退回'));
     } catch (e) { h('<div class="notice bad">' + esc(e.message) + '</div>'); }
   }
 
@@ -465,19 +519,26 @@
       try { cache.students = (await api('overview')).students; } catch (e) { return h('<div class="notice bad">' + esc(e.message) + '</div>'); }
     }
     const opt = (v, t) => '<option value="' + esc(v) + '">' + esc(t) + '</option>';
-    h('<div class="card"><h3>登錄時數</h3>' +
-      '<p class="muted">值班：夜診值班完成（每次 2 小時）。補實習：學生完成補實習。手動調整：更正錯誤，可輸入負數。</p>' +
+    const $ = id => document.getElementById(id);
+    h('<div class="card"><h3>代為登錄時數</h3>' +
+      '<p class="muted">一般情況請學生自行在「夜診值班」分頁登錄。這裡用於補登、補實習，或更正錯誤（手動調整可輸入負數）。</p>' +
       '<label>學生</label><select id="l_stu">' + opt('', '請選擇') + cache.students.map(s => opt(s.id, s.name + '（' + balText(s.summary.balance) + '）')).join('') + '</select>' +
       '<label>類別</label><select id="l_cat">' + ME.meta.ledgerCategories.map(c => opt(c, c)).join('') + '</select>' +
-      '<label>時數</label><input id="l_hours" type="number" step="0.5" value="2">' +
-      '<label>說明（例如：11/12 夜診值班，林老師）</label><input id="l_note">' +
+      '<label>日期</label><input type="date" id="l_date" value="' + ME.meta.today + '">' +
+      '<div id="l_tWrap"><label>夜診老師</label><select id="l_teacher">' + opt('', '請選擇') + (ME.nightTeachers || []).map(t => opt(t.id, t.name)).join('') + '</select></div>' +
+      '<label>時數</label><input id="l_hours" type="number" step="0.5" value="' + ME.meta.dutyHours + '">' +
+      '<label>說明（選填）</label><input id="l_note">' +
       '<button class="block" id="l_btn" style="margin-top:14px">登錄</button></div>');
-    document.getElementById('l_btn').onclick = async () => {
-      const personId = document.getElementById('l_stu').value;
+    const syncCat = () => { $('l_tWrap').hidden = $('l_cat').value !== '夜診值班'; };
+    $('l_cat').onchange = syncCat; syncCat();
+    $('l_btn').onclick = async () => {
+      const personId = $('l_stu').value;
       if (!personId) return toast('請選擇學生', 'warn');
+      const isDuty = $('l_cat').value === '夜診值班';
+      if (isDuty && !$('l_teacher').value) return toast('請選擇夜診老師', 'warn');
       try {
-        const x = await api('ledgerAdd', { personId, category: document.getElementById('l_cat').value,
-          hours: Number(document.getElementById('l_hours').value), note: document.getElementById('l_note').value });
+        const x = await api('ledgerAdd', { personId, category: $('l_cat').value, date: $('l_date').value,
+          teacherId: isDuty ? $('l_teacher').value : '', hours: Number($('l_hours').value), note: $('l_note').value });
         toast(x.message, 'ok'); cache.students = null; renderLedger();
       } catch (e) { toast(e.message, 'bad'); }
     };
