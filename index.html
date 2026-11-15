@@ -201,45 +201,106 @@
       '<div class="card"><h3>掃描打卡</h3><p class="muted">請到物理治療辦公室（或虎尾站）的打卡電腦前，按下方按鈕掃描螢幕上的 QR Code。上班 08:00、下班 17:00。</p>' +
       '<button class="block big" id="scanBtn">📷　掃描打卡</button></div>' +
       '<div class="card"><h3>今日打卡紀錄</h3>' + (list ? '<table><tr><th>時間</th><th>類型</th><th>判定</th></tr>' + list + '</table>' : '<p class="muted">今天尚未打卡</p>') + '</div>' +
-      '<div class="card"><h3>忘了簽到／簽退？補簽申請</h3>' +
-      '<p class="muted">由當天的臨床指導老師確認（忘簽到看上午、忘簽退看下午的老師），最晚下一個上班日申請。確認後需寫 PDCA，不需補實習時數。</p>' +
-      '<div class="grid2"><div><label>日期</label><input type="date" id="fx_date" value="' + ME.meta.today + '" max="' + ME.meta.today + '"></div>' +
-      '<div><label>類型</label><select id="fx_kind"><option value="out">忘了簽退</option><option value="in">忘了簽到</option></select></div></div>' +
-      '<label id="fx_tl">實際離開時間</label><input type="time" id="fx_time" value="17:00">' +
-      '<label>說明（選填）</label><input id="fx_note" placeholder="例如：下班時趕著離開忘了掃描">' +
-      '<button class="block" id="fx_btn" style="margin-top:10px">送出給臨床指導老師確認</button>' +
-      '<div id="fx_list" style="margin-top:10px"></div></div>');
+      '<p style="text-align:center;margin:4px 0"><a href="#" id="allPunch" style="color:var(--muted,#5f716f)">查看我的所有打卡紀錄</a></p>' +
+      '<div id="fx_area"></div>');
+    document.getElementById('allPunch').onclick = e => { e.preventDefault(); renderPunchHistory(); };
     document.getElementById('scanBtn').onclick = scan;
     bindFix();
   }
-  async function bindFix() {
-    const g = id => document.getElementById(id);
-    if (!g('fx_btn')) return;
-    g('fx_kind').onchange = () => {
-      const isIn = g('fx_kind').value === 'in';
-      g('fx_tl').textContent = isIn ? '實際到班時間' : '實際離開時間';
-      g('fx_time').value = isIn ? '08:00' : '17:00';
-    };
-    g('fx_btn').onclick = async () => {
-      if (!g('fx_date').value || !g('fx_time').value) return toast('請填寫日期與時間', 'warn');
-      const b = g('fx_btn'); b.disabled = true; b.textContent = '送出中…';
-      try { const r = await api('fixSubmit', { date: g('fx_date').value, kind: g('fx_kind').value, time: g('fx_time').value, note: g('fx_note').value }); toast(r.message, 'ok'); renderPunch(); }
-      catch (e) { toast(e.message, 'bad'); b.disabled = false; b.textContent = '送出給臨床指導老師確認'; }
-    };
+  /* 我的打卡紀錄（依月份） */
+  async function renderPunchHistory(month) {
+    loading('讀取打卡紀錄…');
     try {
-      const r = await api('myFixes');
-      if (g('fx_date')) g('fx_date').min = r.earliest;
-      if (!r.fixes.length || !g('fx_list')) return;
-      g('fx_list').innerHTML = '<div class="tablewrap"><table><tr><th>日期</th><th>類型</th><th>時間</th><th>狀態</th><th></th></tr>' +
-        r.fixes.map(f => '<tr><td>' + esc(f.date) + '</td><td>' + esc(f.kind) + '</td><td>' + esc(f.time) + '</td><td>' + dutyChip(f.status) +
-          (f.comment ? '<br><span class="muted">' + esc(f.comment) + '</span>' : '') + '</td><td>' +
-          (f.status === '待確認' ? '<button class="danger" style="padding:6px 10px" data-fxc="' + esc(f.id) + '">撤回</button>' : '') + '</td></tr>').join('') + '</table></div>';
-      $main.querySelectorAll('[data-fxc]').forEach(b => b.onclick = async () => {
-        if (!confirm('確定撤回這筆補簽申請？')) return;
-        try { const x = await api('fixCancel', { fixId: b.dataset.fxc }); toast(x.message, 'ok'); } catch (e) { toast(e.message, 'bad'); }
-        renderPunch();
-      });
-    } catch (e) { /* 讀取失敗不影響打卡 */ }
+      const r = await api('myPunches', { month: month || '' });
+      const cell = (t, v, tag) => t ? esc(t) + (v && v !== '正常' ? ' <span style="white-space:nowrap" class="chip ' + (v === '遲到' || v === '早退' ? 'warn' : 'gray') + '">' + esc(v) + '</span>' : '') +
+        (tag ? '<br><span class="muted" style="font-size:12px">' + esc(tag) + '</span>' : '') : '<span class="muted">—</span>';
+      const rows = r.days.map(d => {
+        const full = d.leaveHours >= 8;
+        const missIn = d.working && !full && !d.inTime, missOut = d.working && !full && d.inTime && !d.outTime && d.date < ME.meta.today;
+        return '<tr><td>' + esc(d.date.slice(5)) + '<span class="muted">（' + d.dow + '）</span></td>' +
+          '<td>' + (full ? '<span style="white-space:nowrap" class="chip gray">全日假</span>' : missIn ? '<span style="white-space:nowrap" class="chip bad">未簽到</span>' : cell(d.inTime, d.inVerdict, d.inTag)) + '</td>' +
+          '<td>' + (full ? '' : missOut ? '<span style="white-space:nowrap" class="chip bad">未簽退</span>' : cell(d.outTime, d.outVerdict, d.outTag)) + '</td>' +
+          '<td>' + (d.leaveHours && !full ? '<span style="white-space:nowrap" class="chip gray">請假 ' + d.leaveHours + 'h</span>' : '') + '</td></tr>';
+      }).join('');
+      h('<div class="card"><div class="row" style="justify-content:space-between"><h3 style="margin:0">我的打卡紀錄</h3>' +
+        '<select id="ph_m" style="width:auto">' + r.months.map(m => '<option value="' + esc(m) + '"' + (m === r.month ? ' selected' : '') + '>' + esc(m) + '</option>').join('') + '</select></div>' +
+        (rows ? '<div class="tablewrap" style="margin-top:10px"><table><tr><th>日期</th><th>簽到</th><th>簽退</th><th></th></tr>' + rows + '</table></div>' : '<p class="muted">這個月沒有紀錄</p>') +
+        '<p class="muted">漏打卡請回「打卡」分頁申請補簽（最晚下一個上班日）。</p>' +
+        '<button class="block" id="ph_back" style="margin-top:8px;background:#eee;color:#333">返回打卡</button></div>');
+      document.getElementById('ph_m').onchange = e => renderPunchHistory(e.target.value);
+      document.getElementById('ph_back').onclick = () => renderPunch();
+    } catch (e) { h('<div class="notice bad">' + esc(e.message) + '</div>'); }
+  }
+
+  /* 補簽：平常只顯示一行小連結；系統偵測到漏打卡、或有申請中的補簽時才顯示卡片 */
+  async function bindFix() {
+    const area = document.getElementById('fx_area');
+    if (!area) return;
+    let r;
+    try { r = await api('myFixes'); } catch (e) { return; }
+    if (!document.getElementById('fx_area')) return;
+    const weekAgo = new Date(Date.parse(ME.meta.today + 'T00:00:00Z') - 7 * 86400000).toISOString().slice(0, 10);
+    const recent = r.fixes.filter(f => f.status === '待確認' || f.applied.slice(0, 10) >= weekAgo);   // 申請中＋近 7 天
+    const hintHtml = r.hints.length ? '<div class="card"><h3>⚠ 系統偵測到漏打卡</h3>' +
+      r.hints.map((x, i) => '<div class="row" style="justify-content:space-between;border-top:1px solid #eee;padding:8px 0">' +
+        '<span>' + esc(x.date) + '　<b>' + esc(x.label) + '</b></span><button data-fxh="' + i + '" style="padding:6px 12px">申請補簽</button></div>').join('') +
+      '<p class="muted" style="margin:6px 0 0">最晚下一個上班日申請，逾期請洽差勤負責老師。</p></div>' : '';
+    const listHtml = recent.length ? '<div class="card"><h3>我的補簽申請</h3>' +
+      recent.map(f => '<div style="border-top:1px solid #eee;padding:8px 0"><div class="row" style="justify-content:space-between;gap:8px">' +
+        '<span><b>' + esc(f.date) + '</b>　' + esc(f.kind) + ' ' + esc(f.time) + '</span>' + dutyChip(f.status) + '</div>' +
+        '<div class="row" style="justify-content:space-between;gap:8px;margin-top:4px"><span class="muted">確認老師：' + esc(f.teachers) +
+        (f.comment ? '　意見：' + esc(f.comment) : '') + '</span>' +
+        (f.status === '待確認' ? '<button class="danger" style="padding:4px 10px" data-fxc="' + esc(f.id) + '">撤回</button>' : '') + '</div></div>').join('') +
+      '</div>' : '';
+    area.innerHTML = hintHtml + listHtml + '<div id="fx_form"></div>' +
+      '<p style="text-align:center;margin:6px 0 18px"><a href="#" id="fx_open" style="color:var(--muted,#5f716f)">忘了簽到或簽退？點這裡申請補簽</a></p>';
+    const opt = (v, t, sel) => '<option value="' + esc(v) + '"' + (sel ? ' selected' : '') + '>' + esc(t) + '</option>';
+    const openForm = async (date, kind, teacherId) => {
+      document.getElementById('fx_open').hidden = true;
+      const isIn = kind === 'in';
+      document.getElementById('fx_form').innerHTML = '<div class="card"><h3>補簽申請</h3>' +
+        '<p class="muted">送給當天的臨床指導老師確認（預設帶入輪站表，可改選）。確認後需寫 PDCA，不需補實習時數。</p>' +
+        '<div class="grid2"><div><label>日期</label><input type="date" id="fx_date" value="' + esc(date) + '" min="' + esc(r.earliest) + '" max="' + ME.meta.today + '"></div>' +
+        '<div><label>類型</label><select id="fx_kind">' + opt('out', '忘了簽退', !isIn) + opt('in', '忘了簽到', isIn) + '</select></div></div>' +
+        '<label id="fx_tl">' + (isIn ? '實際到班時間' : '實際離開時間') + '</label><input type="time" id="fx_time" value="' + (isIn ? '08:00' : '17:00') + '">' +
+        '<label>確認的臨床指導老師</label><select id="fx_teacher">' + opt('', '請選擇') + (ME.teachers || []).map(t => opt(t.id, t.name, t.id === teacherId)).join('') + '</select>' +
+        '<label>說明（選填）</label><input id="fx_note" placeholder="例如：下班時趕著離開忘了掃描">' +
+        '<div class="grid2" style="margin-top:10px"><button id="fx_cancel" style="background:#eee;color:#333">取消</button><button id="fx_btn">送出</button></div></div>';
+      const g = id => document.getElementById(id);
+      const suggest = async () => {
+        try { const x = await api('fixTeachers', { date: g('fx_date').value, kind: g('fx_kind').value }); if (x.teacherId && g('fx_teacher')) g('fx_teacher').value = x.teacherId; } catch (e) { /* 保留原選擇 */ }
+      };
+      if (!teacherId) suggest();
+      g('fx_date').onchange = suggest;
+      g('fx_kind').onchange = () => {
+        const inK = g('fx_kind').value === 'in';
+        g('fx_tl').textContent = inK ? '實際到班時間' : '實際離開時間';
+        g('fx_time').value = inK ? '08:00' : '17:00';
+        suggest();
+      };
+      g('fx_cancel').onclick = () => { g('fx_form').innerHTML = ''; g('fx_open').hidden = false; };
+      g('fx_btn').onclick = async () => {
+        if (!g('fx_date').value || !g('fx_time').value) return toast('請填寫日期與時間', 'warn');
+        if (!g('fx_teacher').value) return toast('請選擇臨床指導老師', 'warn');
+        const b = g('fx_btn'); b.disabled = true; b.textContent = '送出中…';
+        try {
+          const x = await api('fixSubmit', { date: g('fx_date').value, kind: g('fx_kind').value, time: g('fx_time').value, teacherId: g('fx_teacher').value, note: g('fx_note').value });
+          toast(x.message, 'ok'); renderPunch();
+        } catch (e) { toast(e.message, 'bad'); b.disabled = false; b.textContent = '送出'; }
+      };
+      g('fx_form').scrollIntoView({ behavior: 'smooth' });
+    };
+    document.getElementById('fx_open').onclick = e => { e.preventDefault(); openForm(ME.meta.today, 'out', ''); };
+    area.querySelectorAll('[data-fxh]').forEach(btn => btn.onclick = () => { const x = r.hints[+btn.dataset.fxh]; openForm(x.date, x.kind, x.teacherId); });
+    area.querySelectorAll('[data-fxc]').forEach(btn => btn.onclick = async () => {
+      if (!confirm('確定撤回這筆補簽申請？')) return;
+      try { const x = await api('fixCancel', { fixId: btn.dataset.fxc }); toast(x.message, 'ok'); } catch (e) { toast(e.message, 'bad'); }
+      renderPunch();
+    });
+  }
+  function periodText(sd, sl, ed, el) {   // 同一天：2026-11-16 08:00–17:00；跨天：2026-11-16 08:00 ～ 2026-11-18 17:00
+    const from = String(sl).split(/[–-]/)[0].trim(), to = String(el).split(/[–-]/).pop().trim();
+    return sd === ed ? sd + ' ' + from + '–' + to : sd + ' ' + from + ' ～ ' + ed + ' ' + to;
   }
   function verdictChip(v) {
     const cls = v === '遲到' || v === '早退' ? 'warn' : v === '正常' ? 'ok' : 'gray';
@@ -288,6 +349,7 @@
         return;
       }
       const kind = r.verdict === '遲到' || r.verdict === '早退' ? 'warn' : 'ok';
+      if (/已派發 PDCA/.test(r.message || '')) { ME.pdcaTodo = (ME.pdcaTodo || 0) + 1; buildNav(); $nav.querySelector('[data-tab="punch"]').classList.add('on'); }
       if (!r.duplicate) ME.todayPunches = (ME.todayPunches || []).concat([{ time: r.time, type: r.type, verdict: r.verdict }]);
       renderPunch('<div class="card result"><div class="big">' + esc(r.time) + '</div><div style="font-size:20px;margin:6px 0">' +
         esc(r.type) + '　' + verdictChip(r.verdict) + '</div>' +
@@ -306,9 +368,6 @@
     const slots = (sel) => m.slots.map((s, i) => opt(i, s, i === sel)).join('');
     const proxyNeeded = m.chain.includes('代理人');
     h('<div class="card"><h3>線上請假</h3>' +
-      '<div class="notice info">請假需於 3 個工作天前提出（病假、生理假除外）。最小單位 2 小時。值班補休需有足夠的夜診值班時數；實習結束前最後兩週可提前休最多 8 小時，結束後再補。實習最後一週（結束日前 7 天內）請事假、值班補休需寫 PDCA。' +
-        (m.leaveMode === 'parallel' ? '\n送出後由' + (m.cosign || []).join('、') + '同時會簽，全部同意即核准' +
-          ((m.notifyOnly || []).length ? '；' + m.notifyOnly.join('、') + '知會' : '') + '。' : '') + '</div>' +
       '<label>假別</label><select id="f_type">' + types.map(t => opt(t, t)).join('') + '</select>' +
       '<div id="subWrap"><label>細項</label><select id="f_sub"></select></div>' +
       '<div class="grid2"><div><label>開始日期</label><input type="date" id="f_sd" value="' + m.today + '"></div>' +
@@ -323,7 +382,14 @@
       '<label>證明文件（照片或 PDF，可稍後補上傳）</label><input type="file" id="f_files" multiple accept="image/*,application/pdf">' +
       '<div id="actWrap"></div>' +
       '<div id="quote" style="margin-top:14px"></div>' +
-      '<button class="block" id="submitBtn" style="margin-top:8px">送出假單</button></div>');
+      '<button class="block" id="submitBtn" style="margin-top:8px">送出假單</button>' +
+      '<details style="margin-top:14px"><summary class="muted">請假規定</summary><p class="muted" style="margin:6px 0 0;line-height:1.7">' +
+        '・請假需於 3 個工作天前提出（病假、生理假除外），最小單位 2 小時。<br>' +
+        '・值班補休需有足夠的夜診值班時數；實習結束前最後兩週可提前休最多 8 小時，結束後再補。<br>' +
+        '・實習最後一週（結束日前 7 天內）請事假、值班補休需寫 PDCA。' +
+        (m.leaveMode === 'parallel' ? '<br>・送出後由' + esc((m.cosign || []).join('、')) + '同時會簽，全部同意即核准' +
+          ((m.notifyOnly || []).length ? '；' + esc(m.notifyOnly.join('、')) + '知會' : '') + '。' : '') +
+        '<br>・有需要注意的地方（逾期、時數不足、最後一週等），試算時會在送出按鈕上方提醒。</p></details></div>');
 
     const $ = id => document.getElementById(id);
     function fillSub() {
@@ -410,7 +476,7 @@
         ME.summary = null; delete cache.hours;
         if (r.pdcaDue) { ME.pdcaTodo = (ME.pdcaTodo || 0) + 1; buildNav(); $nav.querySelector('[data-tab="leave"]').classList.add('on'); }
         h('<div class="card result"><div style="font-size:40px">✅</div><h3>' + esc(r.message) + '</h3>' +
-          (r.pdcaDue ? '<div class="notice warn" style="text-align:left">⚠ 這次未於 3 個工作天前請假，系統已派發 PDCA 改善計畫。\n請於 <b>' + esc(r.pdcaDue) + '</b> 前填寫並完成全部簽章，逾期以遲到論。</div>' +
+          (r.pdcaDue ? '<div class="notice warn" style="text-align:left">⚠ 這次屬「' + esc(r.pdcaType || '未於三日前請假') + '」，系統已派發 PDCA 改善計畫。\n請於 <b>' + esc(r.pdcaDue) + '</b> 前填寫並完成全部簽章，逾期以遲到論。</div>' +
             '<button class="block" id="toPdca" style="margin-bottom:10px">立即填寫 PDCA</button>' : '') +
           quoteHtml(r.quote) +
           '<button class="block ghost" id="toList">查看我的假單</button></div>');
@@ -481,7 +547,7 @@
     return '<div class="card">' +
       '<div class="row" style="justify-content:space-between"><h3 style="margin:0">' + (l.student && extra ? esc(l.student) + '・' : '') +
         esc(l.type) + (l.sub ? '／' + esc(l.sub) : '') + '</h3>' + statusChip(l.status) + '</div>' +
-      '<p style="margin:6px 0">' + esc(l.startDate) + ' ' + esc(l.startSlot) + '<br>～ ' + esc(l.endDate) + ' ' + esc(l.endSlot) + '</p>' +
+      '<p style="margin:6px 0">' + esc(periodText(l.startDate, l.startSlot, l.endDate, l.endSlot)) + '</p>' +
       '<p class="muted" style="margin:0">' + l.hours + ' 小時・需扣抵 ' + l.deduction + ' 小時（' + esc(l.rule) + '）</p>' +
       '<p style="margin:6px 0">事由：' + esc(l.reason) + '</p>' +
       (l.activities ? '<div class="pdca-box" style="margin:6px 0"><b>學術活動</b>' + esc(l.activities) + '</div>' : '') +
