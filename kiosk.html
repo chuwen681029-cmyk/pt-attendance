@@ -58,7 +58,7 @@
     const [id, code] = decodeURIComponent(h.slice(7)).split('.');
     history.replaceState(null, '', location.pathname);
     app.innerHTML = '<div class="msg"><h1>設定中…</h1></div>';
-    fetch(CFG.GAS_URL + '?action=kioskActivate&k=' + encodeURIComponent(id || '') + '&c=' + encodeURIComponent(code || ''))
+    fetch(CFG.GAS_URL, { method: 'POST', body: JSON.stringify({ action: 'kioskActivate', k: id || '', c: code || '' }) })
       .then(r => r.text()).then(t => {
         let j;
         try { j = JSON.parse(t); } catch (e) {
