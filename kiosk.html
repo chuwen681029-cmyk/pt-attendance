@@ -46,6 +46,13 @@
 
   // ---------- 首次設定：網址帶 #setup=代碼.密鑰 ----------
   const h = location.hash;
+  // 清除本電腦的打卡站設定：網址後面加 #reset
+  if (h === '#reset') {
+    try { localStorage.removeItem(KEY); } catch (e) {}
+    history.replaceState(null, '', location.pathname);
+    app.innerHTML = '<div class="msg"><h1>已清除本電腦的打卡站設定</h1><p>這台電腦不再顯示打卡 QR Code。</p></div>';
+    return;
+  }
   if (h.indexOf('#setup=') === 0) {
     const [id, secret] = decodeURIComponent(h.slice(7)).split('.');
     if (id && secret) { try { localStorage.setItem(KEY, JSON.stringify({ id, secret })); } catch (e) {} }
