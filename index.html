@@ -98,9 +98,21 @@
     setTimeout(() => el.remove(), 3500);
   }
 
-  async function api(action, data) {
-    const res = await fetch(CFG.GAS_URL, { method: 'POST', body: JSON.stringify(Object.assign({ action, idToken }, data || {})) });
-    const j = await res.json();
+  // 網頁一開就先喚醒後端（與 LINE 登入同時進行），縮短第一次等待
+  try { fetch(CFG.GAS_URL, { method: 'POST', body: JSON.stringify({ action: 'ping' }) }).catch(() => {}); } catch (e) { /* 忽略 */ }
+  async function api(action, data, retried) {
+    let j;
+    try {
+      const res = await fetch(CFG.GAS_URL, { method: 'POST', body: JSON.stringify(Object.assign({ action, idToken }, data || {})) });
+      j = await res.json();
+    } catch (e) {
+      // 很多人同時開啟時，偶爾會連線失敗 → 等 1.5 秒自動重試一次
+      if (!retried) { await new Promise(r => setTimeout(r, 1500)); return api(action, data, true); }
+      throw new Error('連線失敗，請稍後再試');
+    }
+    if (!j.ok && !retried && /忙碌|Service invoked too many times|too many/i.test(j.error || '')) {
+      await new Promise(r => setTimeout(r, 2000)); return api(action, data, true);
+    }
     if (!j.ok) {
       if (j.code === 'TOKEN_EXPIRED' && !sessionStorage.getItem('pt_reloaded')) {
         sessionStorage.setItem('pt_reloaded', '1'); location.reload();
