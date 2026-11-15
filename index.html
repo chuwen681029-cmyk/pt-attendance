@@ -128,6 +128,8 @@
         doPunch({ k: p.get('k'), s: p.get('s'), t: p.get('t') });
       } else if (p.get('view') === 'approve') {
         switchTab('approve');
+      } else if (p.get('view') === 'overview' && ME.isAdmin) {
+        switchTab('overview');
       } else if (p.get('view') === 'pdca' && ME.isStudent) {
         switchTab('pdca');
       } else if (ME.isStudent && ME.pdcaTodo) {
@@ -186,8 +188,46 @@
     h((resultHtml || '') +
       '<div class="card"><h3>掃描打卡</h3><p class="muted">請到物理治療辦公室（或虎尾站）的打卡電腦前，按下方按鈕掃描螢幕上的 QR Code。上班 08:00、下班 17:00。</p>' +
       '<button class="block big" id="scanBtn">📷　掃描打卡</button></div>' +
-      '<div class="card"><h3>今日打卡紀錄</h3>' + (list ? '<table><tr><th>時間</th><th>類型</th><th>判定</th></tr>' + list + '</table>' : '<p class="muted">今天尚未打卡</p>') + '</div>');
+      '<div class="card"><h3>今日打卡紀錄</h3>' + (list ? '<table><tr><th>時間</th><th>類型</th><th>判定</th></tr>' + list + '</table>' : '<p class="muted">今天尚未打卡</p>') + '</div>' +
+      '<div class="card"><h3>忘了簽到／簽退？補簽申請</h3>' +
+      '<p class="muted">由當天的臨床指導老師確認（忘簽到看上午、忘簽退看下午的老師），最晚下一個上班日申請。確認後需寫 PDCA，不需補實習時數。</p>' +
+      '<div class="grid2"><div><label>日期</label><input type="date" id="fx_date" value="' + ME.meta.today + '" max="' + ME.meta.today + '"></div>' +
+      '<div><label>類型</label><select id="fx_kind"><option value="out">忘了簽退</option><option value="in">忘了簽到</option></select></div></div>' +
+      '<label id="fx_tl">實際離開時間</label><input type="time" id="fx_time" value="17:00">' +
+      '<label>說明（選填）</label><input id="fx_note" placeholder="例如：下班時趕著離開忘了掃描">' +
+      '<button class="block" id="fx_btn" style="margin-top:10px">送出給臨床指導老師確認</button>' +
+      '<div id="fx_list" style="margin-top:10px"></div></div>');
     document.getElementById('scanBtn').onclick = scan;
+    bindFix();
+  }
+  async function bindFix() {
+    const g = id => document.getElementById(id);
+    if (!g('fx_btn')) return;
+    g('fx_kind').onchange = () => {
+      const isIn = g('fx_kind').value === 'in';
+      g('fx_tl').textContent = isIn ? '實際到班時間' : '實際離開時間';
+      g('fx_time').value = isIn ? '08:00' : '17:00';
+    };
+    g('fx_btn').onclick = async () => {
+      if (!g('fx_date').value || !g('fx_time').value) return toast('請填寫日期與時間', 'warn');
+      const b = g('fx_btn'); b.disabled = true; b.textContent = '送出中…';
+      try { const r = await api('fixSubmit', { date: g('fx_date').value, kind: g('fx_kind').value, time: g('fx_time').value, note: g('fx_note').value }); toast(r.message, 'ok'); renderPunch(); }
+      catch (e) { toast(e.message, 'bad'); b.disabled = false; b.textContent = '送出給臨床指導老師確認'; }
+    };
+    try {
+      const r = await api('myFixes');
+      if (g('fx_date')) g('fx_date').min = r.earliest;
+      if (!r.fixes.length || !g('fx_list')) return;
+      g('fx_list').innerHTML = '<div class="tablewrap"><table><tr><th>日期</th><th>類型</th><th>時間</th><th>狀態</th><th></th></tr>' +
+        r.fixes.map(f => '<tr><td>' + esc(f.date) + '</td><td>' + esc(f.kind) + '</td><td>' + esc(f.time) + '</td><td>' + dutyChip(f.status) +
+          (f.comment ? '<br><span class="muted">' + esc(f.comment) + '</span>' : '') + '</td><td>' +
+          (f.status === '待確認' ? '<button class="danger" style="padding:6px 10px" data-fxc="' + esc(f.id) + '">撤回</button>' : '') + '</td></tr>').join('') + '</table></div>';
+      $main.querySelectorAll('[data-fxc]').forEach(b => b.onclick = async () => {
+        if (!confirm('確定撤回這筆補簽申請？')) return;
+        try { const x = await api('fixCancel', { fixId: b.dataset.fxc }); toast(x.message, 'ok'); } catch (e) { toast(e.message, 'bad'); }
+        renderPunch();
+      });
+    } catch (e) { /* 讀取失敗不影響打卡 */ }
   }
   function verdictChip(v) {
     const cls = v === '遲到' || v === '早退' ? 'warn' : v === '正常' ? 'ok' : 'gray';
@@ -207,6 +247,34 @@
     loading('打卡中…');
     try {
       const r = await api('punch', q);
+      if (r.needConfirm) {
+        renderPunch('<div class="card result"><div class="big">' + esc(r.time) + '</div>' +
+          '<div style="font-size:20px;margin:6px 0">還沒到下班時間 ' + esc(r.expect) + '</div>' +
+          '<div class="notice warn" style="text-align:left;white-space:pre-line">' + esc(r.message) + '</div>' +
+          '<div class="grid2" style="margin-top:10px"><button id="earlyNo">取消（下班再簽）</button>' +
+          '<button class="danger" id="earlyYes">確定提早簽退</button></div></div>');
+        document.getElementById('earlyNo').onclick = () => { renderPunch('<div class="notice info">已取消，這次沒有記錄簽退。下班後請再掃描一次。</div>'); };
+        document.getElementById('earlyYes').onclick = () => doPunch({ k: r.k, token: r.token, confirmEarly: true, choice: r.choice, arriveTime: r.arriveTime });
+        return;
+      }
+      if (r.needChoice) {
+        renderPunch('<div class="card result"><div class="big">' + esc(r.time) + '</div>' +
+          '<div class="notice warn" style="text-align:left">' + esc(r.message) + '</div>' +
+          '<button class="block" id="chIn" style="margin-top:8px">我現在才到班 → 記為簽到（遲到）</button>' +
+          '<div style="border-top:1px solid #eee;margin-top:14px;padding-top:10px;text-align:left">' +
+          '<b>早上忘了簽到，現在要下班</b><label>早上實際到班時間</label><input type="time" id="chTime" value="' + esc(r.expect) + '">' +
+          '<p class="muted" style="margin:4px 0 0">會記為簽退，並送出忘簽到的補簽申請給上午的臨床指導老師確認；確認後需寫 PDCA（不需補實習時數）。</p>' +
+          '<button class="block" id="chForgot" style="margin-top:8px">記為簽退＋申請補簽到</button></div>' +
+          '<button class="block" id="chCancel" style="margin-top:8px;background:#eee;color:#333">取消</button></div>');
+        document.getElementById('chIn').onclick = () => doPunch({ k: r.k, token: r.token, choice: 'in' });
+        document.getElementById('chForgot').onclick = () => {
+          const t = document.getElementById('chTime').value;
+          if (!t) return toast('請填寫早上實際到班時間', 'warn');
+          doPunch({ k: r.k, token: r.token, choice: 'forgotIn', arriveTime: t });
+        };
+        document.getElementById('chCancel').onclick = () => renderPunch('<div class="notice info">已取消，這次沒有記錄。</div>');
+        return;
+      }
       const kind = r.verdict === '遲到' || r.verdict === '早退' ? 'warn' : 'ok';
       if (!r.duplicate) ME.todayPunches = (ME.todayPunches || []).concat([{ time: r.time, type: r.type, verdict: r.verdict }]);
       renderPunch('<div class="card result"><div class="big">' + esc(r.time) + '</div><div style="font-size:20px;margin:6px 0">' +
@@ -226,7 +294,7 @@
     const slots = (sel) => m.slots.map((s, i) => opt(i, s, i === sel)).join('');
     const proxyNeeded = m.chain.includes('代理人');
     h('<div class="card"><h3>線上請假</h3>' +
-      '<div class="notice info">請假需於 3 個工作天前提出（病假、生理假除外）。最小單位 2 小時。值班補休需有足夠的夜診值班時數。' +
+      '<div class="notice info">請假需於 3 個工作天前提出（病假、生理假除外）。最小單位 2 小時。值班補休需有足夠的夜診值班時數；實習結束前最後兩週可提前休最多 8 小時，結束後再補。實習最後一週（結束日前 7 天內）請事假、值班補休需寫 PDCA。' +
         (m.leaveMode === 'parallel' ? '\n送出後由' + (m.cosign || []).join('、') + '同時會簽，全部同意即核准' +
           ((m.notifyOnly || []).length ? '；' + m.notifyOnly.join('、') + '知會' : '') + '。' : '') + '</div>' +
       '<label>假別</label><select id="f_type">' + types.map(t => opt(t, t)).join('') + '</select>' +
@@ -343,7 +411,9 @@
   function quoteHtml(q) {
     const flags = [];
     if (q.late) flags.push('<div class="notice warn">⚠ 未於 3 個工作天前申請：依規定需填寫 PDCA 改善計畫，並由臨床指導老師與組長斟酌是否准假。</div>');
-    if (q.preLeave) flags.push('<div class="notice warn">⚠ 值班時數不足，屬「未補先休」：需臨床指導老師、差勤負責老師與組長同意，並主動附相關證明。</div>');
+    if (q.finalWeek) flags.push('<div class="notice warn">⚠ 實習最後一週（' + esc(q.finalWeekRange) + '）為離站流程，請' + esc(q.type) + '送出後會派發 PDCA 改善計畫。</div>');
+    if (q.advanceLeave) flags.push('<div class="notice warn">⚠ 實習最後兩週提前休 ' + (-q.after) + ' 小時（未補先休，上限 8 小時）：請事先與差勤負責老師討論，實習結束後再補實習。</div>');
+    else if (q.preLeave) flags.push('<div class="notice warn">⚠ 值班時數不足，屬「未補先休」：需臨床指導老師、差勤負責老師與組長同意，並主動附相關證明。</div>');
     if (q.warnTotal) flags.push('<div class="notice bad">⚠ 本次實習累計請假將達 ' + (q.totalLeaveHours / 8) + ' 天（已達 3 天示警標準）。</div>');
     if (q.needProof) flags.push('<div class="notice info">此假別須附證明文件（可事後補上傳）。</div>');
     const ct = (q.clinicalTeachers || []).map(t => esc(t.name) + '（' + esc(t.part) + '）').join('、');
@@ -535,6 +605,7 @@
     h('<div class="card"><h3>夜診值班登錄</h3>' +
       '<p class="muted">值班結束後登錄，夜診老師確認後核發 ' + m.dutyHours + ' 小時，可用於日後請假扣抵（補休）。</p>' +
       '<label>學生</label><input value="' + esc(ME.profile.name) + '" disabled>' +
+      '<div id="d_purWrap"></div>' +
       '<label>值班日期</label><input type="date" id="d_date" value="' + m.today + '" max="' + m.today + '" min="' + minDate + '">' +
       '<label>夜診老師</label><select id="d_teacher">' + opt('', '請選擇') + (ME.nightTeachers || []).map(t => opt(t.id, t.name)).join('') + '</select>' +
       '<label>說明（選填）</label><input id="d_note" placeholder="例如：骨科夜診">' +
@@ -546,14 +617,23 @@
       if (!$('d_date').value) return toast('請選擇值班日期', 'warn');
       if (!teacherId) return toast('請選擇夜診老師', 'warn');
       const btn = $('d_btn'); btn.disabled = true; btn.textContent = '送出中…';
-      try { const r = await api('dutySubmit', { date: $('d_date').value, teacherId, note: $('d_note').value }); toast(r.message, 'ok'); renderDuty(); }
+      const purpose = $('d_purpose') ? $('d_purpose').value : '';
+      try { const r = await api('dutySubmit', { date: $('d_date').value, teacherId, note: $('d_note').value, purpose }); toast(r.message, 'ok'); renderDuty(); }
       catch (e) { toast(e.message, 'bad'); btn.disabled = false; btn.textContent = '送出給老師確認'; }
     };
+    api('myViolations').then(v => {
+      const owed = v.summary.owed;
+      if (owed <= 0 || !$('d_purWrap')) return;
+      $('d_purWrap').innerHTML = '<label>用途</label><select id="d_purpose">' +
+        '<option value="' + esc(m.makeupLabel) + '">違規補實習（遲到／曠職，尚需 ' + owed + ' 小時）</option>' +
+        '<option value="">一般值班（累積補休時數）</option></select>' +
+        '<p class="muted" style="margin:4px 0 0">遲到、曠職需在夜診時段補實習，不可使用先前的值班時數。</p>';
+    }).catch(() => {});
     try {
       const r = await api('myDuties');
       if (!r.duties.length) { $('d_list').innerHTML = '<p class="muted">尚無紀錄</p>'; return; }
       $('d_list').innerHTML = '<div class="tablewrap"><table><tr><th>日期</th><th>老師</th><th>時數</th><th>狀態</th><th></th></tr>' +
-        r.duties.map(d => '<tr><td>' + esc(d.date) + '</td><td>' + esc(d.teacher) + '</td><td>' + d.hours + '</td><td>' + dutyChip(d.status) +
+        r.duties.map(d => '<tr><td>' + esc(d.date) + (d.purpose === m.makeupLabel ? '<br><span class="chip warn">補實習</span>' : '') + '</td><td>' + esc(d.teacher) + '</td><td>' + d.hours + '</td><td>' + dutyChip(d.status) +
           (d.comment ? '<br><span class="muted">' + esc(d.comment) + '</span>' : '') + '</td><td>' +
           (d.status === '待確認' ? '<button class="danger" style="padding:6px 10px" data-dc="' + esc(d.id) + '">撤回</button>' : '') + '</td></tr>').join('') +
         '</table></div>';
@@ -569,18 +649,26 @@
   async function renderHours() {
     loading('讀取時數…');
     try {
-      const r = await api('myHours');
+      const [r, v] = await Promise.all([api('myHours'), api('myViolations').catch(() => null)]);
       const s = r.summary;
+      const vioHtml = v && v.list.length ? '<div class="card"><h3>違規補實習（遲到、曠職）</h3>' +
+        '<div class="notice ' + (v.summary.owed > 0 ? 'warn' : 'ok') + '" style="font-size:18px;font-weight:700">' +
+        (v.summary.owed > 0 ? '尚需補實習 ' + v.summary.owed + ' 小時' : '違規補實習已全部完成') + '</div>' +
+        '<p class="muted">遲到一次補 ' + ME.meta.lateMakeupHours + ' 小時、曠職以 1:' + ME.meta.absentRatio + ' 補實習，一律在夜診時段補，不可使用先前的值班時數；未補完不可辦理離院。</p>' +
+        '<div class="tablewrap"><table><tr><th>日期</th><th>事由</th><th>需補</th><th>已補</th><th>狀態</th></tr>' +
+        v.list.map(x => '<tr><td>' + esc(x.date) + '</td><td>' + esc(x.type) + '<br><span class="muted">' + esc(x.reason) + '</span></td><td>' + x.owed + '</td><td>' + x.done +
+          '</td><td><span class="chip ' + ({ '已抵銷': 'ok', '待補': 'warn', '待認定': 'warn' }[x.status] || 'gray') + '">' + esc(x.status) + '</span></td></tr>').join('') +
+        '</table></div></div>' : '';
       const rows = r.ledger.map(x => '<tr><td>' + esc(x.time.slice(0, 10)) + '</td><td>' + esc(x.category) + '</td><td style="text-align:right;color:' +
         (x.hours < 0 ? 'var(--bad)' : 'var(--ok)') + '">' + (x.hours > 0 ? '+' : '') + x.hours + '</td><td>' + esc(x.note || x.ref) + '</td></tr>').join('');
       h('<div class="card"><h3>我的時數</h3>' +
         '<div class="notice ' + (s.balance < 0 ? 'warn' : 'ok') + '" style="font-size:18px;font-weight:700">' + balText(s.balance) + '</div>' +
-        (s.warnTotal ? '<div class="notice bad">⚠ 本次實習累計請假已達 ' + s.totalLeaveDays + ' 天</div>' : '') +
+        (s.warnTotal ? '<div class="notice bad">⚠ 本次實習累計請假已達 ' + s.totalLeaveDays + ' 天，將進行輔導並提報會議討論</div>' : '') +
         '<div class="stat">' +
           '<div><b>' + s.totalLeaveHours + '</b><span>累計請假時數（' + s.totalLeaveDays + ' 天）</span></div>' +
           '<div><b>' + s.pendingLeaveHours + '</b><span>其中簽核中</span></div>' +
           '<div><b>' + s.earned + '</b><span>累計值班時數</span></div>' +
-          '<div><b>' + s.madeUp + '</b><span>已補實習時數</span></div></div></div>' +
+          '<div><b>' + s.madeUp + '</b><span>已補實習時數</span></div></div></div>' + vioHtml +
         '<div class="card"><h3>時數明細</h3>' + (rows ? '<div class="tablewrap"><table><tr><th>日期</th><th>類別</th><th style="text-align:right">時數</th><th>說明</th></tr>' + rows + '</table></div>' : '<p class="muted">尚無紀錄</p>') +
         '<p class="muted">夜診值班請到「夜診值班」分頁登錄，老師確認後自動核發。</p></div>');
     } catch (e) { h('<div class="notice bad">' + esc(e.message) + '</div>'); }
@@ -591,9 +679,9 @@
     loading('讀取待簽核假單…');
     try {
       const r = await api('pending');
-      const duties = r.duties || [], pdcas = r.pdcas || [], rems = r.remedials || [];
-      ME.pendingCount = r.leaves.length + duties.length + pdcas.length + rems.length; buildNav(); $nav.querySelector('[data-tab="approve"]').classList.add('on');
-      if (!r.leaves.length && !duties.length && !pdcas.length && !rems.length) return h('<div class="center">目前沒有待您簽核的項目 👍</div>');
+      const duties = r.duties || [], pdcas = r.pdcas || [], rems = r.remedials || [], fixes = r.fixes || [];
+      ME.pendingCount = r.leaves.length + duties.length + pdcas.length + rems.length + fixes.length; buildNav(); $nav.querySelector('[data-tab="approve"]').classList.add('on');
+      if (!r.leaves.length && !duties.length && !pdcas.length && !rems.length && !fixes.length) return h('<div class="center">目前沒有待您簽核的項目 👍</div>');
       const remHtml = rems.map(m => '<div class="card"><div class="row" style="justify-content:space-between"><h3 style="margin:0">📚 補救教學</h3>' +
         '<span class="chip ' + (m.overdue ? 'bad' : 'warn') + '">' + (m.overdue ? '已逾期' : '待補救') + '</span></div>' +
         '<p style="margin:6px 0"><b>' + esc(m.student) + '</b>　缺席 ' + esc(m.date) + '</p>' +
@@ -607,11 +695,19 @@
         '<textarea placeholder="意見（退回修改時必填）" data-pcm="' + esc(p.id) + '"></textarea>' +
         '<div class="grid2" style="margin-top:8px"><button data-pok="' + esc(p.id) + '">同意</button><button class="danger" data-pno="' + esc(p.id) + '">退回修改</button></div></div>').join('');
       const dutyHtml = duties.map(d => '<div class="card"><div class="row" style="justify-content:space-between"><h3 style="margin:0">🌙 夜診值班確認</h3>' + dutyChip(d.status) + '</div>' +
-        '<p style="margin:6px 0"><b>' + esc(d.student) + '</b>　' + esc(d.date) + '　' + d.hours + ' 小時</p>' +
+        '<p style="margin:6px 0"><b>' + esc(d.student) + '</b>　' + esc(d.date) + '　' + d.hours + ' 小時' +
+          (d.purpose === ME.meta.makeupLabel ? '　<span class="chip warn">違規補實習</span>' : '') + '</p>' +
         (d.note ? '<p class="muted" style="margin:0">說明：' + esc(d.note) + '</p>' : '') +
         '<textarea placeholder="意見（退回時必填）" data-dcm="' + esc(d.id) + '" style="margin-top:8px"></textarea>' +
         '<div class="grid2" style="margin-top:8px"><button data-dok="' + esc(d.id) + '">同意並核發</button><button class="danger" data-dno="' + esc(d.id) + '">退回</button></div></div>').join('');
-      h(pdcaHtml + dutyHtml + remHtml + r.leaves.map(l => {
+      const fixHtml = fixes.map(f => '<div class="card"><div class="row" style="justify-content:space-between"><h3 style="margin:0">🕘 補簽確認</h3>' + dutyChip(f.status) + '</div>' +
+        '<p style="margin:6px 0"><b>' + esc(f.student) + '</b>　' + esc(f.date) + '　' + esc(f.kind) + '</p>' +
+        '<p style="margin:0">' + (f.kind === '忘簽到' ? '實際到班' : '實際離開') + '：<b>' + esc(f.time) + '</b></p>' +
+        (f.note ? '<p class="muted" style="margin:4px 0 0">說明：' + esc(f.note) + '</p>' : '') +
+        '<p class="muted" style="margin:4px 0 0">請確認學生當天確實在班。確認後系統會派發 PDCA（不需補實習時數），並告知差勤負責老師、教學組長。</p>' +
+        '<textarea placeholder="意見（退回時必填）" data-fxm="' + esc(f.id) + '" style="margin-top:8px"></textarea>' +
+        '<div class="grid2" style="margin-top:8px"><button data-fxok="' + esc(f.id) + '">確認屬實</button><button class="danger" data-fxno="' + esc(f.id) + '">退回</button></div></div>').join('');
+      h(fixHtml + pdcaHtml + dutyHtml + remHtml + r.leaves.map(l => {
         const s = l.summary;
         const info = '<hr><p class="muted" style="margin:0 0 6px">學生累計請假 ' + s.totalLeaveHours + ' 小時（' + s.totalLeaveDays + ' 天）' +
           (s.warnTotal ? ' <span class="chip bad">已達 3 天</span>' : '') + '；' + balText(s.balance) + '</p>' +
@@ -654,6 +750,15 @@
       $main.querySelectorAll('[data-pno]').forEach(b => b.onclick = () => pact(b.dataset.pno, '退回'));
       $main.querySelectorAll('[data-dok]').forEach(b => b.onclick = () => dact(b.dataset.dok, '同意'));
       $main.querySelectorAll('[data-dno]').forEach(b => b.onclick = () => dact(b.dataset.dno, '退回'));
+      const fact = async (id, decision) => {
+        const comment = ($main.querySelector('[data-fxm="' + id + '"]') || {}).value || '';
+        if (decision === '退回' && !comment.trim()) return toast('退回請填寫原因', 'warn');
+        try { loading('送出中…'); const x = await api('fixApprove', { fixId: id, decision, comment }); toast(x.message, 'ok'); }
+        catch (e) { toast(e.message, 'bad'); }
+        renderApprove();
+      };
+      $main.querySelectorAll('[data-fxok]').forEach(b => b.onclick = () => fact(b.dataset.fxok, '同意'));
+      $main.querySelectorAll('[data-fxno]').forEach(b => b.onclick = () => fact(b.dataset.fxno, '退回'));
     } catch (e) { h('<div class="notice bad">' + esc(e.message) + '</div>'); }
   }
 
@@ -670,14 +775,16 @@
           (s.leaveSlots ? '<br><span class="chip gray">請假 ' + s.leaveSlots * 2 + 'h</span>' : '');
         return '<tr><td><b>' + esc(s.name) + '</b></td><td>' + today + '</td>' +
           '<td>' + s.summary.totalLeaveHours + 'h' + (s.summary.warnTotal ? ' <span class="chip bad">≥3天</span>' : '') + '</td>' +
-          '<td style="color:' + (s.summary.balance < 0 ? 'var(--bad)' : 'inherit') + '">' + s.summary.balance + 'h</td></tr>';
+          '<td style="color:' + (s.summary.balance < 0 ? 'var(--bad)' : 'inherit') + '">' + s.summary.balance + 'h</td>' +
+          '<td>' + (s.violation && s.violation.owed > 0 ? '<span class="chip warn">' + s.violation.owed + 'h</span>' : '—') +
+          (s.violation && s.violation.absentCount ? '<br><span class="muted">曠職 ' + s.violation.absentCount + ' 次</span>' : '') + '</td></tr>';
       }).join('');
       const anomalies = r.anomalies.map(a => '<tr><td>' + esc(a.date.slice(5)) + '</td><td>' + esc(a.name) + '</td><td><span class="chip warn">' + esc(a.type) + '</span></td><td>' + esc(a.note) + '</td></tr>').join('');
       const pend = r.pending.map(l => '<li>' + esc(l.student) + '　' + esc(l.type) + ' ' + esc(l.startDate) + '（' + l.hours + 'h）— 待 <b>' + esc((l.waiting && l.waiting.length) ? l.waiting.join('、') : l.step) + '</b>' + (l.activities ? '<br><span class="muted">學術活動：' + esc(l.activities) + '（核准後建立補救教學）</span>' : '') + '</li>').join('');
       const proof = r.missingProof.map(l => '<li>' + esc(l.student) + '　' + esc(l.type) + ' ' + esc(l.startDate) + '</li>').join('');
       h('<div class="card"><h3>今日（' + esc(r.today) + '）' + (r.working ? '' : '<span class="chip gray">非上班日</span>') + '</h3>' +
-        '<div class="tablewrap"><table><tr><th>學生</th><th>今日打卡</th><th>累計請假</th><th>值班餘額</th></tr>' + (rows || '<tr><td colspan="4" class="muted">尚無學生</td></tr>') + '</table></div>' +
-        '<p class="muted">值班餘額為負數表示需補實習時數。</p></div>' +
+        '<div class="tablewrap"><table><tr><th>學生</th><th>今日打卡</th><th>累計請假</th><th>值班餘額</th><th>違規待補</th></tr>' + (rows || '<tr><td colspan="5" class="muted">尚無學生</td></tr>') + '</table></div>' +
+        '<p class="muted">值班餘額為負數表示需補實習時數。違規待補（遲到、曠職）另外計算，需在夜診補完才可辦理離院。</p></div>' + absenceCardHtml(r) +
         '<div class="card"><h3>簽核中假單（' + r.pending.length + '）</h3>' + (pend ? '<ul class="log" style="color:inherit">' + pend + '</ul>' : '<p class="muted">無</p>') + '</div>' +
         '<div class="card"><h3>待補證明（' + r.missingProof.length + '）</h3>' + (proof ? '<ul class="log" style="color:inherit">' + proof + '</ul>' : '<p class="muted">無</p>') + '</div>' +
         '<div class="card"><h3>待補救教學（' + (r.openRemedials || []).length + '）</h3>' + ((r.openRemedials || []).length ? '<ul class="log" style="color:inherit">' +
@@ -687,8 +794,83 @@
           r.openPdca.map(p => '<li>' + esc(p.student) + '　' + esc(p.type) + ' ' + esc(p.date) + '　' + pdcaChip(p.status) +
             (p.status === '簽核中' ? ' 待 <b>' + esc(p.step) + '</b>' : '') + '　期限 ' + esc(p.due) + (p.overdue ? ' <span class="chip bad">已逾期</span>' : '') + '</li>').join('') +
           '</ul>' : '<p class="muted">無</p>') + '</div>' +
-        '<div class="card"><h3>近 14 天差勤異常</h3>' + (anomalies ? '<div class="tablewrap"><table><tr><th>日期</th><th>學生</th><th>類型</th><th>說明</th></tr>' + anomalies + '</table></div>' : '<p class="muted">無</p>') + '</div>');
+        '<div class="card"><h3>近 14 天差勤異常</h3>' + (anomalies ? '<div class="tablewrap"><table><tr><th>日期</th><th>學生</th><th>類型</th><th>說明</th></tr>' + anomalies + '</table></div>' : '<p class="muted">無</p>') + '</div>' +
+        exportCardHtml(r));
+      bindAbsence(); bindExport();
     } catch (e) { h('<div class="notice bad">' + esc(e.message) + '</div>'); }
+  }
+
+  /* ---------- 曠職認定（差勤負責老師）與違規紀錄單匯出 ---------- */
+  const canJudge = () => (ME.profile.roles || []).includes('差勤負責老師');
+  function absenceCardHtml(r) {
+    const list = r.pendingAbsence || [];
+    const judge = canJudge();
+    const opt = (v, t) => '<option value="' + esc(v) + '">' + esc(t) + '</option>';
+    return '<div class="card"><h3>曠職認定（' + list.length + '）</h3>' +
+      (list.length ? list.map(x => '<div style="border-top:1px solid #eee;padding:8px 0"><b>' + esc(x.student) + '</b>　' + esc(x.date) +
+        '<p class="muted" style="margin:4px 0">' + esc(x.reason) + '</p>' +
+        (judge ? '<div class="grid2"><div><label>缺席時數</label><input type="number" min="0.5" step="0.5" value="' + x.absent + '" data-abh="' + esc(x.id) + '"></div>' +
+          '<div><label>補充說明（選填）</label><input data-abr="' + esc(x.id) + '"></div></div>' +
+          '<div class="grid2" style="margin-top:6px"><button data-abok="' + esc(x.id) + '">認定曠職（×' + ME.meta.absentRatio + '）</button>' +
+          '<button class="danger" data-abno="' + esc(x.id) + '">不予認定</button></div>'
+          : '<p class="muted" style="margin:0">待差勤負責老師認定</p>') + '</div>').join('') : '<p class="muted">目前沒有待認定的疑似曠職</p>') +
+      (judge ? '<details style="margin-top:8px"><summary>手動新增曠職（擅自離院、同學代簽等）</summary>' +
+        '<label>學生</label><select id="ab_stu">' + opt('', '請選擇') + (r.students || []).map(s => opt(s.id, s.name)).join('') + '</select>' +
+        '<div class="grid2"><div><label>日期</label><input type="date" id="ab_date" value="' + ME.meta.today + '" max="' + ME.meta.today + '"></div>' +
+        '<div><label>缺席時數</label><input type="number" id="ab_hours" min="0.5" step="0.5" placeholder="例如 1.5"></div></div>' +
+        '<label>事由</label><input id="ab_reason" placeholder="例如：14:00–15:20 擅自離院">' +
+        '<p class="muted" style="margin:4px 0 0">缺席時數以 1 小時為單位，未滿 1 小時以 1 小時計，×' + ME.meta.absentRatio + ' 為需補實習時數。</p>' +
+        '<button class="block" id="ab_add" style="margin-top:8px">認定曠職</button></details>' : '') + '</div>';
+  }
+  function bindAbsence() {
+    const q = sel => $main.querySelector(sel);
+    $main.querySelectorAll('[data-abok]').forEach(b => b.onclick = async () => {
+      const id = b.dataset.abok, hours = q('[data-abh="' + id + '"]').value;
+      if (!confirm('確定認定為曠職？將派發 PDCA 並通知相關老師。')) return;
+      b.disabled = true;
+      try { const r = await api('absenceConfirm', { violationId: id, absentHours: hours, reason: q('[data-abr="' + id + '"]').value }); toast(r.message, 'ok'); }
+      catch (e) { toast(e.message, 'bad'); }
+      renderOverview();
+    });
+    $main.querySelectorAll('[data-abno]').forEach(b => b.onclick = async () => {
+      const id = b.dataset.abno, comment = q('[data-abr="' + id + '"]').value;
+      if (!comment) return toast('請在「補充說明」填寫不予認定的原因', 'warn');
+      b.disabled = true;
+      try { const r = await api('absenceDismiss', { violationId: id, comment }); toast(r.message, 'ok'); }
+      catch (e) { toast(e.message, 'bad'); }
+      renderOverview();
+    });
+    const add = document.getElementById('ab_add');
+    if (add) add.onclick = async () => {
+      const g = id => document.getElementById(id).value;
+      if (!g('ab_stu')) return toast('請選擇學生', 'warn');
+      if (!g('ab_hours')) return toast('請輸入缺席時數', 'warn');
+      if (!g('ab_reason')) return toast('請填寫事由', 'warn');
+      if (!confirm('確定認定為曠職？將派發 PDCA 並通知相關老師。')) return;
+      add.disabled = true;
+      try { const r = await api('absenceConfirm', { studentId: g('ab_stu'), date: g('ab_date'), absentHours: g('ab_hours'), reason: g('ab_reason') }); toast(r.message, 'ok'); }
+      catch (e) { toast(e.message, 'bad'); }
+      renderOverview();
+    };
+  }
+  function exportCardHtml(r) {
+    const opt = (v, t) => '<option value="' + esc(v) + '">' + esc(t) + '</option>';
+    return '<div class="card"><h3>匯出差勤違規紀錄單</h3>' +
+      '<label>學生</label><select id="ex_stu">' + opt('', '全部學生') + (r.students || []).map(s => opt(s.id, s.name)).join('') + '</select>' +
+      '<div class="grid2"><div><label>起</label><input type="date" id="ex_from"></div><div><label>迄</label><input type="date" id="ex_to"></div></div>' +
+      '<p class="muted" style="margin:4px 0 0">日期不填＝全部期間。產生 PDF 後寄到您的 Email，簽章欄自動帶入電子簽核。</p>' +
+      '<button class="block" id="ex_btn" style="margin-top:8px">匯出 PDF（寄到我的 Email）</button></div>';
+  }
+  function bindExport() {
+    const b = document.getElementById('ex_btn');
+    if (!b) return;
+    b.onclick = async () => {
+      const g = id => document.getElementById(id).value;
+      b.disabled = true; b.textContent = '產生中，約需 10–30 秒…';
+      try { const r = await api('violationExport', { studentId: g('ex_stu'), from: g('ex_from'), to: g('ex_to') }); toast(r.message, 'ok'); }
+      catch (e) { toast(e.message, 'bad'); }
+      b.disabled = false; b.textContent = '匯出 PDF（寄到我的 Email）';
+    };
   }
 
   /* ---------- 紙本補登打卡 ---------- */
