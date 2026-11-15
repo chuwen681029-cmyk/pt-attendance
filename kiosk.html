@@ -59,11 +59,19 @@
     history.replaceState(null, '', location.pathname);
     app.innerHTML = '<div class="msg"><h1>設定中…</h1></div>';
     fetch(CFG.GAS_URL + '?action=kioskActivate&k=' + encodeURIComponent(id || '') + '&c=' + encodeURIComponent(code || ''))
-      .then(r => r.json()).then(j => {
+      .then(r => r.text()).then(t => {
+        let j;
+        try { j = JSON.parse(t); } catch (e) {
+          // 後端回傳的不是 JSON（多半是部署權限或程式錯誤的 Google 錯誤頁）→ 顯示線索方便排除
+          const hint = t.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
+          app.innerHTML = '<div class="msg"><h1>系統回應異常</h1><p>後端沒有回傳正確資料，請確認 Apps Script 部署的「誰可以存取」是「所有人」，並已部署新版本。</p>' +
+            '<p style="color:#888;font-size:14px">' + hint.replace(/</g, '&lt;') + '</p></div>';
+          return;
+        }
         if (!j.ok) { app.innerHTML = '<div class="msg"><h1>無法設定打卡站</h1><p>' + String(j.error || '').replace(/</g, '&lt;') + '</p></div>'; return; }
         try { localStorage.setItem(KEY, JSON.stringify({ id: j.id, secret: j.secret })); } catch (e) {}
         location.reload();
-      }).catch(() => { app.innerHTML = '<div class="msg"><h1>無法連線到系統</h1><p>請確認網路後，重新開啟設定網址。</p></div>'; });
+      }).catch(e => { app.innerHTML = '<div class="msg"><h1>無法連線到系統</h1><p>請確認網路後，重新開啟設定網址。<br>（可能是醫院網路擋住 script.google.com，或部署的存取權限不是「所有人」）</p><p style="color:#888;font-size:14px">' + String(e && e.message || e).replace(/</g, '&lt;') + '</p></div>'; });
     return;
   }
   try { kiosk = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) { kiosk = null; }
