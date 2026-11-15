@@ -42,7 +42,7 @@
   const CFG = window.APP_CONFIG;
   const KEY = 'pt_kiosk_v1';
   const app = document.getElementById('app');
-  let kiosk = null, offset = 0, lastSlot = -1, cryptoKey = null, stationName = '';
+  let kiosk = null, offset = 0, lastSlot = -1, cryptoKey = null, stationName = '', stopped = false;
 
   // ---------- 首次設定：網址帶 #setup=代碼.密鑰 ----------
   const h = location.hash;
@@ -113,6 +113,7 @@
 
   let cur = { slot: 0, sig: '' };
   async function tick() {
+    if (stopped) return;
     const now = serverNow();
     const d = new Date(now + 8 * 3600e3);
     $('clock').textContent = pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' + pad(d.getUTCSeconds());
@@ -129,10 +130,16 @@
   }
 
   async function feed() {
-    if (!cur.sig) return;
+    if (stopped || !cur.sig) return;
     try {
       const url = CFG.GAS_URL + '?action=kioskFeed&k=' + encodeURIComponent(kiosk.id) + '&s=' + cur.slot + '&t=' + cur.sig;
       const j = await (await fetch(url)).json();
+      if (!j.ok && /不存在或已停用/.test(j.error || '')) {
+        // 密鑰已失效（打卡站被停用或重新產生）→ 清掉本機設定，不再顯示 QR Code
+        try { localStorage.removeItem(KEY); } catch (e) {}
+        app.innerHTML = '<div class="msg"><h1>此打卡站已停用</h1><p>這台電腦的打卡站設定已失效並清除，QR Code 不再顯示。<br>若這台是醫院的打卡電腦，請管理者重新開啟新的設定網址。</p></div>';
+        stopped = true; return;
+      }
       if (!j.ok) { $('err').textContent = j.error || '讀取打卡名單失敗'; return; }
       $('err').textContent = '';
       if (j.station !== stationName) { stationName = j.station; $('station').textContent = stationName; document.title = '打卡站－' + stationName; }
