@@ -54,9 +54,17 @@
     return;
   }
   if (h.indexOf('#setup=') === 0) {
-    const [id, secret] = decodeURIComponent(h.slice(7)).split('.');
-    if (id && secret) { try { localStorage.setItem(KEY, JSON.stringify({ id, secret })); } catch (e) {} }
+    // 一次性設定網址：用設定碼向系統換取密鑰，設定碼用過即作廢
+    const [id, code] = decodeURIComponent(h.slice(7)).split('.');
     history.replaceState(null, '', location.pathname);
+    app.innerHTML = '<div class="msg"><h1>設定中…</h1></div>';
+    fetch(CFG.GAS_URL + '?action=kioskActivate&k=' + encodeURIComponent(id || '') + '&c=' + encodeURIComponent(code || ''))
+      .then(r => r.json()).then(j => {
+        if (!j.ok) { app.innerHTML = '<div class="msg"><h1>無法設定打卡站</h1><p>' + String(j.error || '').replace(/</g, '&lt;') + '</p></div>'; return; }
+        try { localStorage.setItem(KEY, JSON.stringify({ id: j.id, secret: j.secret })); } catch (e) {}
+        location.reload();
+      }).catch(() => { app.innerHTML = '<div class="msg"><h1>無法連線到系統</h1><p>請確認網路後，重新開啟設定網址。</p></div>'; });
+    return;
   }
   try { kiosk = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) { kiosk = null; }
 
