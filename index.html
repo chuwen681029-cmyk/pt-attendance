@@ -68,7 +68,7 @@
   .result .big { font-size:40px; font-weight:700; }
   hr { border:0; border-top:1px solid var(--line); margin:14px 0; }
 </style>
-<script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+<script charset="utf-8" id="liffsdk" async src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 </head>
 <body>
 <header><div class="t">物理治療實習差勤系統</div><div class="s" id="who">載入中…</div></header>
@@ -81,6 +81,22 @@
   const $main = document.getElementById('main');
   const $nav = document.getElementById('nav');
   let idToken = '', ME = null, currentTab = '';
+  // 加速開啟：先用上次（同一天）的資料立即顯示畫面，背景再向伺服器更新
+  const ME_KEY = 'pt_me_cache_v2';
+  let tokenResolve; const tokenReady = new Promise(r => { tokenResolve = r; });
+  let freshResolve; const freshReady = new Promise(r => { freshResolve = r; });
+  let firstTab = '', userActed = false;
+  const taipeiToday = () => new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);
+  function readMeCache() { try { return JSON.parse(localStorage.getItem(ME_KEY) || 'null'); } catch (e) { return null; } }
+  function writeMeCache(m) { try { m && m.bound ? localStorage.setItem(ME_KEY, JSON.stringify(m)) : localStorage.removeItem(ME_KEY); } catch (e) { /* 忽略 */ } }
+  function liffSdkReady() {
+    return new Promise((res, rej) => {
+      if (window.liff) return res();
+      const s = document.getElementById('liffsdk');
+      s.addEventListener('load', () => res());
+      s.addEventListener('error', () => rej(new Error('LINE 元件載入失敗，請確認網路後重新整理')));
+    });
+  }
   const cache = {};
 
   /* ---------- 工具 ---------- */
@@ -101,6 +117,7 @@
   // 網頁一開就先喚醒後端（與 LINE 登入同時進行），縮短第一次等待
   try { fetch(CFG.GAS_URL, { method: 'POST', body: JSON.stringify({ action: 'ping' }) }).catch(() => {}); } catch (e) { /* 忽略 */ }
   async function api(action, data, retried) {
+    if (!idToken) await tokenReady;
     let j;
     try {
       const res = await fetch(CFG.GAS_URL, { method: 'POST', body: JSON.stringify(Object.assign({ action, idToken }, data || {})) });
@@ -125,34 +142,58 @@
 
   /* ---------- 啟動 ---------- */
   async function boot() {
+    const p = new URLSearchParams(location.search);
+    const cached = readMeCache();
+    const early = !!(cached && cached.bound && cached.meta && cached.meta.today === taipeiToday());
+    if (early) { ME = Object.assign({}, cached, { _stale: true }); showApp(p, true); }
     try {
+      await liffSdkReady();
       await liff.init({ liffId: CFG.LIFF_ID });
       if (!liff.isLoggedIn()) { liff.login({ redirectUri: location.href }); return; }
       idToken = liff.getIDToken();
-      ME = await api('me');
-      if (!ME.bound) return renderBind();
-      document.getElementById('who').textContent = ME.profile.name + '（' + ME.profile.roles.join('、') + '）';
-      const p = new URLSearchParams(location.search);
-      buildNav();
-      if (p.get('k') && p.get('s') && p.get('t') && ME.isStudent) {
-        history.replaceState(null, '', location.pathname);
-        switchTab('punch');
-        doPunch({ k: p.get('k'), s: p.get('s'), t: p.get('t') });
-      } else if (p.get('view') === 'approve') {
-        switchTab('approve');
-      } else if (p.get('view') === 'overview' && ME.isAdmin) {
-        switchTab('overview');
-      } else if (p.get('view') === 'pdca' && ME.isStudent) {
-        switchTab('pdca');
-      } else if (ME.isStudent && ME.pdcaTodo) {
-        switchTab('pdca');
-      } else {
-        switchTab(ME.isStudent ? 'punch' : (ME.isAdmin ? 'overview' : 'approve'));
+      tokenResolve();
+      const fresh = await api('me');
+      writeMeCache(fresh);
+      if (!fresh.bound) { ME = fresh; freshResolve(); return renderBind(); }
+      const sameUser = early && cached.profile && fresh.profile && cached.profile.id === fresh.profile.id;
+      if (sameUser && ME && ME.todayPunches) {      // 開啟時剛打的卡可能比背景資料晚寫入 → 合併，避免畫面少一筆
+        const k = x => x.time + '|' + x.type, have = new Set((fresh.todayPunches || []).map(k));
+        fresh.todayPunches = (fresh.todayPunches || []).concat(ME.todayPunches.filter(x => !have.has(k(x))));
       }
+      ME = fresh; freshResolve();
+      if (!early || !sameUser) return showApp(p, false);
+      // 同一人：只更新名稱、導覽列徽章；打卡頁（用到今日打卡紀錄）在使用者還沒操作時重畫
+      document.getElementById('who').textContent = ME.profile.name + '（' + ME.profile.roles.join('、') + '）';
+      buildNav();
+      $nav.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.tab === currentTab));
+      if (!userActed && currentTab === 'punch') renderTab('punch');   // 其他分頁本來就向伺服器抓最新資料，不重抓
     } catch (e) {
+      if (early && userActed) return toast(e.message, 'bad');
       h('<div class="card"><h3>無法載入</h3><p>' + esc(e.message) + '</p><button onclick="location.reload()">重新載入</button></div>');
     }
   }
+
+  function showApp(p, stale) {
+    document.getElementById('who').textContent = ME.profile.name + '（' + ME.profile.roles.join('、') + '）' + (stale ? ' · 更新中…' : '');
+    buildNav();
+    if (p.get('k') && p.get('s') && p.get('t') && ME.isStudent) {
+      history.replaceState(null, '', location.pathname);
+      userActed = true;
+      openTab('punch');
+      doPunch({ k: p.get('k'), s: p.get('s'), t: p.get('t') });
+    } else if (p.get('view') === 'approve') {
+      openTab('approve');
+    } else if (p.get('view') === 'overview' && (ME.isAdmin || ME.canOverview)) {
+      openTab('overview');
+    } else if (p.get('view') === 'pdca' && ME.isStudent) {
+      openTab('pdca');
+    } else if (ME.isStudent && ME.pdcaTodo) {
+      openTab('pdca');
+    } else {
+      openTab(ME.isStudent ? 'punch' : (ME.isAdmin ? 'overview' : 'approve'));
+    }
+  }
+  function openTab(id) { firstTab = id; setTab(id); renderTab(id); }
 
   /* ---------- 綁定 ---------- */
   function renderBind() {
@@ -174,7 +215,8 @@
     if (ME.isStudent) t.push(['punch', '⏱', '打卡'], ['leave', '📝', '請假'], ['myleaves', '📄', '我的假單'], ['pdca', '📋', 'PDCA'], ['duty', '🌙', '夜診值班'], ['hours', '⌛', '時數']);
     // 只有學生身分的人不需要簽核分頁（已取消代理人關卡）
     if (ME.profile.roles.some(r => r !== '學生') || ME.pendingCount) t.push(['approve', '✅', '簽核']);
-    if (ME.isAdmin) t.push(['overview', '📊', '總覽'], ['backfill', '🗂', '補登打卡'], ['ledger', '➕', '登錄時數']);
+    if (ME.isAdmin || ME.canOverview) t.push(['overview', '📊', '總覽']);   // 所有老師都能看總覽（115.11.19）
+    if (ME.isAdmin) t.push(['backfill', '🗂', '補登打卡'], ['ledger', '➕', '登錄時數']);
     return t;
   }
   function buildNav() {
@@ -183,12 +225,21 @@
       '<button data-tab="' + id + '"><span class="ico">' + ico + '</span>' + name +
       (id === 'approve' && ME.pendingCount ? '<span class="badge">' + ME.pendingCount + '</span>' : '') +
       (id === 'pdca' && ME.pdcaTodo ? '<span class="badge">' + ME.pdcaTodo + '</span>' : '') + '</button>').join('');
-    $nav.querySelectorAll('button').forEach(b => b.onclick = () => switchTab(b.dataset.tab));
+    $nav.querySelectorAll('button').forEach(b => b.onclick = () => { userActed = true; switchTab(b.dataset.tab); });
   }
-  function switchTab(id) {
+  async function switchTab(id) {
+    setTab(id);
+    if (ME && ME._stale && id !== firstTab) {      // 背景資料還沒更新完：等最新資料再顯示（表單選項以最新為準）
+      loading('載入中…'); await freshReady; if (currentTab !== id) return;
+    }
+    renderTab(id);
+  }
+  function setTab(id) {
     currentTab = id;
     $nav.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.tab === id));
     window.scrollTo(0, 0);
+  }
+  function renderTab(id) {
     ({ punch: renderPunch, leave: renderLeave, myleaves: renderMyLeaves, pdca: renderPdca, duty: renderDuty, hours: renderHours,
        approve: renderApprove, overview: renderOverview, backfill: renderBackfill, ledger: renderLedger }[id] || renderPunch)();
   }
@@ -384,7 +435,9 @@
       '<div id="quote" style="margin-top:14px"></div>' +
       '<button class="block" id="submitBtn" style="margin-top:8px">送出假單</button>' +
       '<details style="margin-top:14px"><summary class="muted">請假規定</summary><p class="muted" style="margin:6px 0 0;line-height:1.7">' +
-        '・請假需於 3 個工作天前提出（病假、生理假除外），最小單位 2 小時。<br>' +
+        '・請假需於 3 個工作天前提出（病假、生理假除外），最小單位 1 小時。<br>' +
+        '・遲到、早退會自動記為請假（以 1 小時為單位），只能用事後的夜診值班補。<br>' +
+        '・累計請假超過 3 天啟動輔導並提報會議；請假及曠職扣除已完成值班後超過 5 天，提報會議討論是否終止實習。<br>' +
         '・值班補休需有足夠的夜診值班時數；實習結束前最後兩週可提前休最多 8 小時，結束後再補。<br>' +
         '・實習最後一週（結束日前 7 天內）請事假、值班補休需寫 PDCA。' +
         (m.leaveMode === 'parallel' ? '<br>・送出後由' + esc((m.cosign || []).join('、')) + '同時會簽，全部同意即核准' +
@@ -413,7 +466,7 @@
       saveActs();
       const wrap = $('actWrap');
       if (!days || !days.length) { wrap.innerHTML = ''; return; }
-      wrap.innerHTML = '<label>學術活動（16:00–17:00）</label><div class="notice info" style="margin-top:0">請假涵蓋 15:00–17:00，請逐日確認學術活動。' +
+      wrap.innerHTML = '<label>學術活動（16:00–17:00）</label><div class="notice info" style="margin-top:0">請假涵蓋 16:00–17:00，請逐日確認學術活動。' +
         '已依行事曆預先帶入；若有調課、換老師請直接修改，活動取消請勾選「沒有學術活動」。核准後系統會通知該老師安排補救教學。</div>' +
         days.map(d => {
           const st = actState[d.date] || { none: !d.fromCalendar, name: d.name, teacherId: d.teacherId };
@@ -732,7 +785,7 @@
       const vioHtml = v && v.list.length ? '<div class="card"><h3>違規補實習（遲到、曠職）</h3>' +
         '<div class="notice ' + (v.summary.owed > 0 ? 'warn' : 'ok') + '" style="font-size:18px;font-weight:700">' +
         (v.summary.owed > 0 ? '尚需補實習 ' + v.summary.owed + ' 小時' : '違規補實習已全部完成') + '</div>' +
-        '<p class="muted">遲到一次補 ' + ME.meta.lateMakeupHours + ' 小時、曠職以 1:' + ME.meta.absentRatio + ' 補實習，一律在夜診時段補，不可使用先前的值班時數；未補完不可辦理離院。</p>' +
+        '<p class="muted">遲到、早退以 1 小時為單位記為請假，曠職以 1:' + ME.meta.absentRatio + ' 補實習，一律用事後的夜診值班補，不可使用先前的值班時數；未補完不可辦理離院。</p>' +
         '<div class="tablewrap"><table><tr><th>日期</th><th>事由</th><th>需補</th><th>已補</th><th>狀態</th></tr>' +
         v.list.map(x => '<tr><td>' + esc(x.date) + '</td><td>' + esc(x.type) + '<br><span class="muted">' + esc(x.reason) + '</span></td><td>' + x.owed + '</td><td>' + x.done +
           '</td><td><span class="chip ' + ({ '已抵銷': 'ok', '待補': 'warn', '待認定': 'warn' }[x.status] || 'gray') + '">' + esc(x.status) + '</span></td></tr>').join('') +
@@ -873,7 +926,7 @@
             (p.status === '簽核中' ? ' 待 <b>' + esc(p.step) + '</b>' : '') + '　期限 ' + esc(p.due) + (p.overdue ? ' <span class="chip bad">已逾期</span>' : '') + '</li>').join('') +
           '</ul>' : '<p class="muted">無</p>') + '</div>' +
         '<div class="card"><h3>近 14 天差勤異常</h3>' + (anomalies ? '<div class="tablewrap"><table><tr><th>日期</th><th>學生</th><th>類型</th><th>說明</th></tr>' + anomalies + '</table></div>' : '<p class="muted">無</p>') + '</div>' +
-        exportCardHtml(r));
+        (r.isAdmin ? exportCardHtml(r) : ''));
       bindAbsence(); bindExport();
     } catch (e) { h('<div class="notice bad">' + esc(e.message) + '</div>'); }
   }
