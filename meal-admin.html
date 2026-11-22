@@ -33,7 +33,8 @@
   table { border-collapse:collapse; width:100%; }
   th, td { border:1px solid var(--b); padding:7px 8px; text-align:center; vertical-align:middle; }
   th { background:#f1f5f4; font-weight:600; }
-  td.l { text-align:left; }
+  td.l { text-align:left; min-width:6.5em; }
+  td:first-child { white-space:nowrap; }
   tr.tot td { background:#fef7e0; font-weight:700; }
   .num { font-variant-numeric:tabular-nums; font-weight:600; }
   .muted { color:var(--m); font-size:13px; }
@@ -53,7 +54,25 @@
   .edit td input[type=text] { width:100%; border:1px solid transparent; padding:6px; }
   .edit td input[type=text]:focus { border-color:var(--g); outline:none; }
   #toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); background:#111827; color:#fff; padding:10px 16px; border-radius:10px; display:none; z-index:9; max-width:90%; }
+  /* 手機版總表：一頁看完 */
+  .mobile-sum { display:none; }
+  .mobile-sum table { table-layout:fixed; font-size:14px; }
+  .mobile-sum th, .mobile-sum td { padding:5px 2px; }
+  .mobile-sum th.d, .mobile-sum td.d { width:3.4em; }
+  .mobile-sum tr.sub td { text-align:left; font-size:12px; color:var(--m); background:#fafafa; padding:3px 6px; border-top:0; line-height:1.45; }
+  .mobile-sum td.z { color:#c8ccd0; font-weight:400; }
+  .mobile-sum td.t { font-weight:700; }
+  @media (max-width: 720px) {
+    .wrap { padding:8px; }
+    .panel { padding:10px; }
+    .wide-sum, .hide-m { display:none !important; }
+    .mobile-sum { display:block; }
+    .btn { padding:7px 11px; font-size:14px; }
+    .tabs button { padding:7px 12px; }
+  }
   @media print {
+    .wide-sum { display:block !important; }
+    .mobile-sum { display:none !important; }
     header, .tabs, .noprint, #toast { display:none !important; }
     body { background:#fff; }
     .panel { border:0; padding:0; }
@@ -167,16 +186,16 @@ function renderSum() {
     '<button class="btn" onclick="refreshSheet()">更新並開啟總表試算表</button>' +
     '<a class="btn sec" style="text-decoration:none" href="' + esc(d.summaryUrl) + '" target="_blank">開啟總表試算表</a>' +
     '<button class="btn sec" onclick="window.print()">列印</button>' +
-    '<span class="muted">總表試算表是另一個獨立檔案，可以單獨共用給營養室或其他管理者。</span></div>';
+    '<span class="muted hide-m">總表試算表是另一個獨立檔案，可以單獨共用給營養室或其他管理者。</span></div>';
   h += '<h3 style="margin:6px 0 10px">訂餐總表 ' + md(d.weekStart) + ' – ' + md(addDays(d.weekStart, 4)) + '</h3>';
-  h += '<div style="overflow-x:auto"><table><tr><th rowspan="2">日期</th><th rowspan="2">主菜一</th><th rowspan="2">主菜二</th><th rowspan="2">素食</th>' +
-    '<th colspan="2">主菜一</th><th colspan="2">主菜二</th><th colspan="2">素食</th><th colspan="2">飯</th><th rowspan="2">總份數</th>' +
+  h += '<div class="wide-sum" style="overflow-x:auto"><table><tr><th rowspan="2">日期</th><th rowspan="2">主菜一</th><th rowspan="2">主菜二</th><th rowspan="2">素食</th>' +
+    '<th colspan="2">主菜一</th><th colspan="2">主菜二</th><th colspan="2">素食</th><th rowspan="2">總份數</th>' +
     (isNaN(price) ? '' : '<th rowspan="2">金額</th>') + '<th rowspan="2" class="noprint">截止</th></tr>' +
-    '<tr><th>白飯</th><th>五穀</th><th>白飯</th><th>五穀</th><th>白飯</th><th>五穀</th><th>白飯</th><th>五穀</th></tr>';
-  var tot = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+    '<tr><th>白飯</th><th>五穀</th><th>白飯</th><th>五穀</th><th>白飯</th><th>五穀</th></tr>';
+  var tot = [0, 0, 0, 0, 0, 0, 0];
   d.days.forEach(function (x) {
     var a = COMBOS.map(function (k) { return x.counts[k] || 0; });
-    var v = a.concat([a[0] + a[2] + a[4], a[1] + a[3] + a[5], x.total]);
+    var v = a.concat([x.total]);
     v.forEach(function (n, i) { tot[i] += n; });
     var m = x.menu, sv = m && m.serve;
     var first = m ? (sv ? esc(m.main1) : '<span class="muted">不供餐</span>') : '<span class="muted">未上傳菜單</span>';
@@ -187,7 +206,24 @@ function renderSum() {
       '<td class="noprint muted">' + esc(x.cutoff) + '</td></tr>';
   });
   h += '<tr class="tot"><td>合計</td><td></td><td></td><td></td>' + tot.map(function (n) { return '<td class="num">' + n + '</td>'; }).join('') +
-    (isNaN(price) ? '' : '<td class="num">' + (tot[8] * price) + '</td>') + '<td class="noprint"></td></tr></table></div>';
+    (isNaN(price) ? '' : '<td class="num">' + (tot[6] * price) + '</td>') + '<td class="noprint"></td></tr></table></div>';
+
+  // 手機版：數字一欄一格，菜名放在每天下方小字
+  var mt = [0, 0, 0, 0, 0, 0, 0];
+  var mh = '<div class="mobile-sum"><table><tr><th class="d" rowspan="2">日期</th><th colspan="2">主菜一</th><th colspan="2">主菜二</th><th colspan="2">素食</th><th rowspan="2">計</th></tr>' +
+    '<tr><th>白</th><th>五穀</th><th>白</th><th>五穀</th><th>白</th><th>五穀</th></tr>';
+  function cell(n, cls) { return '<td class="num ' + (cls || '') + (n ? '' : ' z') + '">' + n + '</td>'; }
+  d.days.forEach(function (x) {
+    var a = COMBOS.map(function (k) { return x.counts[k] || 0; });
+    a.concat([x.total]).forEach(function (n, i) { mt[i] += n; });
+    var m = x.menu, sv = m && m.serve;
+    mh += '<tr><td class="d">' + md(x.date) + '<br>' + x.dow + '</td>' + a.map(function (n) { return cell(n); }).join('') + cell(x.total, 't') + '</tr>';
+    mh += '<tr class="sub"><td colspan="8">' + (sv ? '①' + esc(m.main1) + '　②' + esc(m.main2) + '　素 ' + esc(m.veg)
+      : (m ? '不供餐' : '未上傳菜單')) + '</td></tr>';
+  });
+  mh += '<tr class="tot"><td class="d">合計</td>' + mt.map(function (n, i) { return cell(n, i === 6 ? 't' : ''); }).join('') + '</tr></table>';
+  if (!isNaN(price)) mh += '<div class="muted" style="margin-top:6px">金額合計 ' + (mt[6] * price) + ' 元</div>';
+  h += mh + '</div>';
 
   h += '<h3 style="margin:16px 0 8px">每日名單</h3><div class="daylist">';
   d.days.forEach(function (x) {
