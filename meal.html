@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>訂餐</title>
+<script>
+  // ===== 只要改這兩行 =====
+  var LIFF_ID  = '2012607668-1QUb1OO7';
+  var MEAL_API = 'https://script.google.com/macros/s/AKfycbzMgcHViQVPfqiwMsnTcMJ33hTUsG65ryO_892nxMAQC_0f4yIO0dviFBcPRz9VrBXcGg/exec';
+</script>
+<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+<style>
+  :root { --g:#0f7b5f; --g2:#e6f4ef; --o:#c2410c; --o2:#fff1e6; --b:#e5e7eb; --t:#1f2937; --m:#6b7280; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: -apple-system, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+         background:#f6f7f8; color:var(--t); font-size:16px; padding-bottom: 40px; }
+  header { background:var(--g); color:#fff; padding:16px 16px 14px; }
+  header h1 { margin:0; font-size:19px; }
+  header .sub { font-size:13px; opacity:.9; margin-top:4px; }
+  .wrap { max-width:560px; margin:0 auto; padding:12px; }
+  .weeknav { display:flex; align-items:center; justify-content:space-between; margin:4px 0 10px; }
+  .weeknav button { border:1px solid var(--b); background:#fff; border-radius:8px; padding:8px 12px; font-size:15px; }
+  .weeknav .label { font-weight:600; }
+  .quick { background:#fff; border:1px solid var(--b); border-radius:12px; padding:12px; margin-bottom:12px; }
+  .quick .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:8px; }
+  .card { background:#fff; border:1px solid var(--b); border-radius:12px; padding:12px 14px; margin-bottom:10px; }
+  .card.ordered { border-color:var(--g); box-shadow:0 0 0 1px var(--g) inset; }
+  .card.off { opacity:.6; }
+  .top { display:flex; justify-content:space-between; align-items:center; }
+  .date { font-weight:700; font-size:17px; }
+  .badge { font-size:13px; padding:3px 9px; border-radius:99px; background:#f3f4f6; color:var(--m); }
+  .badge.ok { background:var(--g2); color:var(--g); font-weight:600; }
+  .badge.lock { background:var(--o2); color:var(--o); }
+  .dish { margin:8px 0 2px; line-height:1.55; }
+  .dish b { display:inline-block; width:3em; color:var(--m); font-weight:500; }
+  .seg { display:inline-flex; border:1px solid var(--b); border-radius:9px; overflow:hidden; }
+  .seg button { border:0; background:#fff; padding:8px 13px; font-size:15px; color:var(--t); }
+  .seg button + button { border-left:1px solid var(--b); }
+  .seg button.on { background:var(--g); color:#fff; }
+  .seg button:disabled { color:#bbb; }
+  .ctrl { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+  .acts { display:flex; gap:8px; margin-top:10px; }
+  .btn { border:0; border-radius:9px; padding:10px 14px; font-size:15px; font-weight:600; background:var(--g); color:#fff; flex:1; }
+  .btn.ghost { background:#fff; color:var(--o); border:1px solid #f3c7a6; flex:0 0 auto; }
+  .btn:disabled { background:#d1d5db; color:#fff; border-color:#d1d5db; }
+  .cut { font-size:12.5px; color:var(--m); margin-top:8px; }
+  .msg { padding:12px; border-radius:10px; background:#fff; border:1px solid var(--b); margin:12px 0; line-height:1.6; }
+  .msg.err { background:#fef2f2; border-color:#fecaca; color:#991b1b; }
+  #toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); background:#111827; color:#fff;
+           padding:10px 16px; border-radius:10px; font-size:15px; display:none; max-width:90%; z-index:9; }
+  .foot { text-align:center; color:var(--m); font-size:13px; margin-top:14px; }
+  .foot a { color:var(--g); }
+</style>
+</head>
+<body>
+<header>
+  <h1>🍱 訂餐</h1>
+  <div class="sub" id="who">登入中…</div>
+</header>
+<div class="wrap">
+  <div id="main"><div class="msg">載入中…</div></div>
+  <div class="foot" id="foot"></div>
+</div>
+<div id="toast"></div>
+
+<script>
+var idToken = '', me = null, weekStart = '', weekData = null;
+var pref = { type: '葷食', rice: '白飯' };
+try { var sp = JSON.parse(localStorage.getItem('mealPref') || 'null'); if (sp) pref = sp; } catch (e) {}
+var picks = {}; // 每天目前選的 {type, rice}
+
+function $(id) { return document.getElementById(id); }
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+function toast(t) { var el = $('toast'); el.textContent = t; el.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(function () { el.style.display = 'none'; }, 2600); }
+function pad(n) { return (n < 10 ? '0' : '') + n; }
+function ymd(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+function addDays(s, n) { var p = s.split('-'); var d = new Date(+p[0], +p[1] - 1, +p[2] + n); return ymd(d); }
+function md(s) { var p = s.split('-'); return (+p[1]) + '/' + (+p[2]); }
+function savePref() { try { localStorage.setItem('mealPref', JSON.stringify(pref)); } catch (e) {} }
+
+async function api(action, data) {
+  var body = Object.assign({ action: action, idToken: idToken }, data || {});
+  var res = await fetch(MEAL_API, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) });
+  var j = await res.json();
+  if (!j.ok) {
+    if (j.code === 'LOGIN') { relogin(); throw new Error('重新登入中…'); }
+    var e = new Error(j.error || '發生錯誤'); e.code = j.code; throw e;
+  }
+  return j.data;
+}
+
+function relogin() {
+  var n = +(sessionStorage.getItem('relogin') || 0);
+  if (n >= 2) { showErr('登入失敗，請關閉後重新開啟。'); return; }
+  sessionStorage.setItem('relogin', n + 1);
+  try { liff.logout(); } catch (e) {}
+  liff.login({ redirectUri: location.href });
+}
+
+function showErr(t) { $('main').innerHTML = '<div class="msg err">' + esc(t) + '</div>'; }
+
+async function start() {
+  try {
+    await liff.init({ liffId: LIFF_ID });
+    if (!liff.isLoggedIn()) { liff.login({ redirectUri: location.href }); return; }
+    idToken = liff.getIDToken();
+    me = await api('me');
+    sessionStorage.removeItem('relogin');
+    $('who').textContent = me.name + '（' + me.id + '）・截止：' + me.cutoff;
+    if (!me.canOrder) { showErr('您不在開放訂餐的名單內，如有需要請洽管理者。'); return; }
+    if (me.isAdmin) $('foot').innerHTML = '<a href="meal-admin.html">前往訂餐後台（管理者）</a>';
+    // 週五下午之後預設看下週
+    var t = new Date(); var dow = (t.getDay() + 6) % 7;
+    weekStart = addDays(ymd(t), -dow);
+    if (dow >= 5 || (dow === 4 && t.getHours() >= 15)) weekStart = addDays(weekStart, 7);
+    await loadWeek();
+  } catch (e) {
+    showErr(e.message);
+  }
+}
+
+async function loadWeek() {
+  $('main').innerHTML = '<div class="msg">載入中…</div>';
+  try {
+    weekData = await api('week', { weekStart: weekStart });
+    weekStart = weekData.weekStart;
+    picks = {};
+    weekData.days.forEach(function (d) {
+      picks[d.date] = d.order ? { type: d.order.type, rice: d.order.rice } : { type: pref.type, rice: pref.rice };
+      if (d.menu && !d.menu.veg && picks[d.date].type === '素食' && !d.order) picks[d.date].type = '葷食';
+    });
+    render();
+  } catch (e) { showErr(e.message); }
+}
+
+function seg(name, opts, val, date, disabledOpts) {
+  return '<div class="seg">' + opts.map(function (o) {
+    var dis = disabledOpts && disabledOpts.indexOf(o) >= 0;
+    return '<button ' + (dis ? 'disabled ' : '') + 'class="' + (o === val ? 'on' : '') + '" onclick="pick(\'' + date + '\',\'' + name + '\',\'' + o + '\')">' + o + '</button>';
+  }).join('') + '</div>';
+}
+
+function render() {
+  var w = weekData;
+  var html = '<div class="weeknav"><button onclick="moveWeek(-7)">‹ 上週</button>' +
+    '<span class="label">' + md(w.weekStart) + ' – ' + md(addDays(w.weekStart, 4)) + '</span>' +
+    '<button onclick="moveWeek(7)">下週 ›</button></div>';
+
+  var open = w.days.filter(function (d) { return d.menu && d.menu.serve && !d.locked; });
+  var orderedN = w.days.filter(function (d) { return d.order; }).length;
+
+  if (!w.days.some(function (d) { return d.menu; })) {
+    html += '<div class="msg">這週的菜單還沒公布。</div>';
+  } else if (open.length) {
+    html += '<div class="quick"><div style="font-weight:600;margin-bottom:8px">一鍵訂整週（還沒截止的日子）</div>' +
+      '<div class="row">' + seg('type', ['葷食', '素食'], pref.type, '__all') + seg('rice', ['白飯', '五穀飯'], pref.rice, '__all') + '</div>' +
+      '<button class="btn" style="width:100%" onclick="orderAll()">全部訂 ' + esc(pref.type + '・' + pref.rice) + '（' + open.length + ' 天）</button></div>';
+  }
+
+  w.days.forEach(function (d) {
+    var m = d.menu, o = d.order, p = picks[d.date];
+    var serve = m && m.serve;
+    var cls = 'card' + (o ? ' ordered' : '') + (!serve || (d.locked && !o) ? ' off' : '');
+    html += '<div class="' + cls + '"><div class="top"><span class="date">' + md(d.date) + '（' + d.dow + '）</span>';
+    if (o) html += '<span class="badge ok">✓ 已訂 ' + esc(o.type + '・' + o.rice) + '</span>';
+    else if (!m) html += '<span class="badge">未公布</span>';
+    else if (!serve) html += '<span class="badge">不供餐</span>';
+    else if (d.locked) html += '<span class="badge lock">已截止</span>';
+    else html += '<span class="badge">未訂</span>';
+    html += '</div>';
+
+    if (m && serve) {
+      html += '<div class="dish"><b>主菜</b>' + esc(m.main || '—') + '<br><b>素食</b>' + esc(m.veg || '（無）') + '</div>';
+      if (m.note) html += '<div class="cut">📝 ' + esc(m.note) + '</div>';
+    } else if (m && m.note) html += '<div class="cut">' + esc(m.note) + '</div>';
+
+    if (serve && !d.locked) {
+      html += '<div class="ctrl">' + seg('type', ['葷食', '素食'], p.type, d.date, m.veg ? [] : ['素食']) +
+        seg('rice', ['白飯', '五穀飯'], p.rice, d.date) + '</div>';
+      var changed = !o || o.type !== p.type || o.rice !== p.rice;
+      html += '<div class="acts"><button class="btn" ' + (changed ? '' : 'disabled') + ' onclick="orderOne(\'' + d.date + '\')">' +
+        (o ? (changed ? '改成 ' + esc(p.type + '・' + p.rice) : '已訂') : '訂餐') + '</button>' +
+        (o ? '<button class="btn ghost" onclick="cancelOne(\'' + d.date + '\')">取消訂餐</button>' : '') + '</div>';
+      html += '<div class="cut">截止：' + esc(d.cutoff) + '</div>';
+    } else if (serve && d.locked) {
+      html += '<div class="cut">已於 ' + esc(d.cutoff) + ' 截止' + (o ? '' : '，如需補訂請洽管理者') + '</div>';
+    }
+    html += '</div>';
+  });
+  html += '<div class="foot">本週已訂 ' + orderedN + ' 餐</div>';
+  $('main').innerHTML = html;
+}
+
+function pick(date, name, val) {
+  if (date === '__all') { pref[name] = val; savePref(); render(); return; }
+  picks[date][name] = val; render();
+}
+
+function moveWeek(n) { weekStart = addDays(weekStart, n); loadWeek(); }
+
+async function orderOne(date) {
+  var p = picks[date];
+  try {
+    await api('order', { date: date, type: p.type, rice: p.rice });
+    pref = { type: p.type, rice: p.rice }; savePref();
+    toast('已訂 ' + md(date) + ' ' + p.type + '・' + p.rice);
+    await loadWeek();
+  } catch (e) { toast(e.message); }
+}
+
+async function cancelOne(date) {
+  if (!confirm('確定取消 ' + md(date) + ' 的餐？')) return;
+  try { await api('cancel', { date: date }); toast('已取消 ' + md(date)); await loadWeek(); }
+  catch (e) { toast(e.message); }
+}
+
+async function orderAll() {
+  var items = weekData.days.filter(function (d) { return d.menu && d.menu.serve && !d.locked; }).map(function (d) {
+    var type = pref.type === '素食' && !d.menu.veg ? '葷食' : pref.type;
+    return { date: d.date, type: type, rice: pref.rice };
+  });
+  if (!items.length) return;
+  try {
+    var res = await api('orderMany', { items: items });
+    var bad = res.filter(function (r) { return r.error; });
+    toast(bad.length ? '部分失敗：' + bad.map(function (b) { return b.error; }).join('；') : '已訂 ' + items.length + ' 天');
+    await loadWeek();
+  } catch (e) { toast(e.message); }
+}
+
+start();
+</script>
+</body>
+</html>

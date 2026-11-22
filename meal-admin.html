@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>訂餐後台</title>
+<script>
+  // ===== 只要改這兩行（和 meal.html 相同） =====
+  var LIFF_ID  = '2012607668-1QUb1OO7';
+  var MEAL_API = 'https://script.google.com/macros/s/AKfycbzMgcHViQVPfqiwMsnTcMJ33hTUsG65ryO_892nxMAQC_0f4yIO0dviFBcPRz9VrBXcGg/exec';
+</script>
+<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="meal-parser.js"></script>
+<style>
+  :root { --g:#0f7b5f; --g2:#e6f4ef; --o:#c2410c; --o2:#fff1e6; --b:#e5e7eb; --t:#1f2937; --m:#6b7280; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,"PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif; background:#f6f7f8; color:var(--t); font-size:15px; }
+  header { background:var(--g); color:#fff; padding:14px 18px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px; }
+  header h1 { margin:0; font-size:19px; }
+  header .sub { font-size:13px; opacity:.9; }
+  .wrap { max-width:1080px; margin:0 auto; padding:14px; }
+  .tabs { display:flex; gap:6px; margin-bottom:12px; }
+  .tabs button { border:1px solid var(--b); background:#fff; padding:9px 16px; border-radius:9px; font-size:15px; }
+  .tabs button.on { background:var(--g); color:#fff; border-color:var(--g); }
+  .panel { background:#fff; border:1px solid var(--b); border-radius:12px; padding:14px; margin-bottom:12px; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
+  .btn { border:0; border-radius:8px; padding:9px 14px; font-size:15px; font-weight:600; background:var(--g); color:#fff; cursor:pointer; }
+  .btn.sec { background:#fff; color:var(--g); border:1px solid var(--g); }
+  .btn.warn { background:#fff; color:var(--o); border:1px solid #f3c7a6; padding:4px 9px; font-size:13px; font-weight:500; }
+  .btn:disabled { opacity:.5; }
+  input[type=text], input[type=date], select { border:1px solid var(--b); border-radius:7px; padding:7px 9px; font-size:15px; font-family:inherit; }
+  table { border-collapse:collapse; width:100%; }
+  th, td { border:1px solid var(--b); padding:7px 8px; text-align:center; vertical-align:middle; }
+  th { background:#f1f5f4; font-weight:600; }
+  td.l { text-align:left; }
+  tr.tot td { background:#fef7e0; font-weight:700; }
+  .num { font-variant-numeric:tabular-nums; font-weight:600; }
+  .muted { color:var(--m); font-size:13px; }
+  .msg { padding:10px 12px; border-radius:9px; background:#f9fafb; border:1px solid var(--b); margin:10px 0; line-height:1.6; }
+  .msg.err { background:#fef2f2; border-color:#fecaca; color:#991b1b; }
+  .msg.warn { background:#fffbeb; border-color:#fde68a; color:#92400e; }
+  .msg.ok { background:var(--g2); border-color:#a7d7c5; color:var(--g); }
+  .daylist { margin-top:6px; }
+  .daylist details { border:1px solid var(--b); border-radius:9px; padding:8px 12px; margin-bottom:6px; background:#fff; }
+  .daylist summary { cursor:pointer; font-weight:600; }
+  .chip { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--b); border-radius:99px; padding:4px 6px 4px 11px; margin:4px 4px 0 0; font-size:14px; }
+  .chip .t { font-size:12px; color:var(--m); }
+  .seg { display:inline-flex; border:1px solid var(--b); border-radius:8px; overflow:hidden; }
+  .seg button { border:0; background:#fff; padding:7px 12px; font-size:15px; }
+  .seg button + button { border-left:1px solid var(--b); }
+  .seg button.on { background:var(--g); color:#fff; }
+  .edit td input[type=text] { width:100%; border:1px solid transparent; padding:6px; }
+  .edit td input[type=text]:focus { border-color:var(--g); outline:none; }
+  #toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); background:#111827; color:#fff; padding:10px 16px; border-radius:10px; display:none; z-index:9; max-width:90%; }
+  @media print {
+    header, .tabs, .noprint, #toast { display:none !important; }
+    body { background:#fff; }
+    .panel { border:0; padding:0; }
+    .daylist details { break-inside:avoid; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>🍱 訂餐後台</h1>
+  <span class="sub" id="who">登入中…</span>
+</header>
+<div class="wrap">
+  <div class="tabs noprint" id="tabs" style="display:none">
+    <button data-t="sum" class="on" onclick="tab('sum')">總表</button>
+    <button data-t="menu" onclick="tab('menu')">上傳菜單</button>
+    <button data-t="proxy" onclick="tab('proxy')">代訂／代取消</button>
+  </div>
+  <div id="main"><div class="msg">載入中…</div></div>
+</div>
+<div id="toast"></div>
+
+<script>
+var idToken = '', me = null;
+var weekStart = '';
+var sumData = null;
+var menuState = { wb: null, file: null, sheet: '', rows: [], info: '' };
+var proxy = { pid: '', date: '', type: '葷食', rice: '白飯' };
+var curTab = 'sum';
+
+function $(id) { return document.getElementById(id); }
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+function toast(t) { var el = $('toast'); el.textContent = t; el.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(function () { el.style.display = 'none'; }, 3000); }
+function pad(n) { return (n < 10 ? '0' : '') + n; }
+function ymd(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+function addDays(s, n) { var p = s.split('-'); return ymd(new Date(+p[0], +p[1] - 1, +p[2] + n)); }
+function monday(s) { var p = s.split('-'); var d = new Date(+p[0], +p[1] - 1, +p[2]); return addDays(s, -((d.getDay() + 6) % 7)); }
+function md(s) { var p = s.split('-'); return (+p[1]) + '/' + (+p[2]); }
+function dowOf(s) { var p = s.split('-'); return '日一二三四五六'[new Date(+p[0], +p[1] - 1, +p[2]).getDay()]; }
+
+async function api(action, data) {
+  var body = Object.assign({ action: action, idToken: idToken }, data || {});
+  var res = await fetch(MEAL_API, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) });
+  var j = await res.json();
+  if (!j.ok) {
+    if (j.code === 'LOGIN') { relogin(); throw new Error('重新登入中…'); }
+    throw new Error(j.error || '發生錯誤');
+  }
+  return j.data;
+}
+function relogin() {
+  var n = +(sessionStorage.getItem('relogin') || 0);
+  if (n >= 2) { showErr('登入失敗，請關閉後重新開啟。'); return; }
+  sessionStorage.setItem('relogin', n + 1);
+  try { liff.logout(); } catch (e) {}
+  liff.login({ redirectUri: location.href });
+}
+function showErr(t) { $('main').innerHTML = '<div class="msg err">' + esc(t) + '</div>'; }
+
+async function start() {
+  try {
+    await liff.init({ liffId: LIFF_ID });
+    if (!liff.isLoggedIn()) { liff.login({ redirectUri: location.href }); return; }
+    idToken = liff.getIDToken();
+    me = await api('me');
+    sessionStorage.removeItem('relogin');
+    $('who').textContent = me.name + '・截止規則：' + me.cutoff;
+    if (!me.isAdmin) { showErr('您沒有管理者權限。'); return; }
+    $('tabs').style.display = '';
+    var t = new Date(); var dow = (t.getDay() + 6) % 7;
+    weekStart = addDays(ymd(t), -dow);
+    if (dow >= 5) weekStart = addDays(weekStart, 7);
+    tab('sum');
+  } catch (e) { showErr(e.message); }
+}
+
+function tab(t) {
+  curTab = t;
+  document.querySelectorAll('#tabs button').forEach(function (b) { b.classList.toggle('on', b.dataset.t === t); });
+  if (t === 'sum') loadSum();
+  if (t === 'menu') renderMenu();
+  if (t === 'proxy') loadSum(true);
+}
+
+function weekNav(fnName) {
+  return '<div class="row noprint"><button class="btn sec" onclick="' + fnName + '(-7)">‹ 上週</button>' +
+    '<b style="min-width:120px;text-align:center">' + md(weekStart) + ' – ' + md(addDays(weekStart, 4)) + '</b>' +
+    '<button class="btn sec" onclick="' + fnName + '(7)">下週 ›</button></div>';
+}
+
+/* ================= 總表 ================= */
+function moveSum(n) { weekStart = addDays(weekStart, n); loadSum(curTab === 'proxy'); }
+
+async function loadSum(forProxy) {
+  $('main').innerHTML = '<div class="msg">載入中…</div>';
+  try {
+    sumData = await api('adminWeek', { weekStart: weekStart });
+    weekStart = sumData.weekStart;
+    if (forProxy) renderProxy(); else renderSum();
+  } catch (e) { showErr(e.message); }
+}
+
+function renderSum() {
+  var d = sumData, price = parseFloat(d.price);
+  var h = weekNav('moveSum');
+  h += '<div class="panel"><div class="row noprint">' +
+    '<button class="btn" onclick="refreshSheet()">更新並開啟總表試算表</button>' +
+    '<a class="btn sec" style="text-decoration:none" href="' + esc(d.summaryUrl) + '" target="_blank">開啟總表試算表</a>' +
+    '<button class="btn sec" onclick="window.print()">列印</button>' +
+    '<span class="muted">總表試算表是另一個獨立檔案，可以單獨共用給營養室或其他管理者。</span></div>';
+  h += '<h3 style="margin:6px 0 10px">訂餐總表 ' + md(d.weekStart) + ' – ' + md(addDays(d.weekStart, 4)) + '</h3>';
+  h += '<div style="overflow-x:auto"><table><tr><th>日期</th><th>主菜</th><th>素食</th><th>葷・白飯</th><th>葷・五穀</th><th>素・白飯</th><th>素・五穀</th><th>葷合計</th><th>素合計</th><th>總份數</th>' +
+    (isNaN(price) ? '' : '<th>金額</th>') + '<th class="noprint">截止</th></tr>';
+  var tot = [0, 0, 0, 0, 0, 0, 0];
+  d.days.forEach(function (x) {
+    var c = x.counts, a = [c['葷食|白飯'], c['葷食|五穀飯'], c['素食|白飯'], c['素食|五穀飯']];
+    var v = a.concat([a[0] + a[1], a[2] + a[3], x.total]);
+    v.forEach(function (n, i) { tot[i] += n; });
+    var menuTxt = x.menu ? (x.menu.serve ? esc(x.menu.main) : '<span class="muted">不供餐</span>') : '<span class="muted">未上傳菜單</span>';
+    h += '<tr><td>' + md(x.date) + '（' + x.dow + '）</td><td class="l">' + menuTxt + '</td><td class="l">' + (x.menu && x.menu.serve ? esc(x.menu.veg) : '') + '</td>' +
+      v.map(function (n) { return '<td class="num">' + n + '</td>'; }).join('') +
+      (isNaN(price) ? '' : '<td class="num">' + (x.total * price) + '</td>') +
+      '<td class="noprint muted">' + esc(x.cutoff) + '</td></tr>';
+  });
+  h += '<tr class="tot"><td>合計</td><td></td><td></td>' + tot.map(function (n) { return '<td class="num">' + n + '</td>'; }).join('') +
+    (isNaN(price) ? '' : '<td class="num">' + (tot[6] * price) + '</td>') + '<td class="noprint"></td></tr></table></div>';
+
+  h += '<h3 style="margin:16px 0 8px">每日名單</h3><div class="daylist">';
+  d.days.forEach(function (x) {
+    if (!x.list.length) { h += '<details><summary>' + md(x.date) + '（' + x.dow + '）　0 份</summary><div class="muted">沒有人訂</div></details>'; return; }
+    h += '<details open><summary>' + md(x.date) + '（' + x.dow + '）　' + x.total + ' 份</summary>';
+    ['葷食|白飯', '葷食|五穀飯', '素食|白飯', '素食|五穀飯'].forEach(function (k) {
+      var ls = x.list.filter(function (o) { return o.type + '|' + o.rice === k; });
+      if (!ls.length) return;
+      h += '<div style="margin-top:6px"><b>' + k.replace('|', '・') + '（' + ls.length + '）</b><br>' + ls.map(function (o) {
+        return '<span class="chip">' + esc(o.name) + (o.by && o.by !== '本人' ? '<span class="t">代訂</span>' : '') +
+          '<button class="btn warn noprint" onclick="proxyCancel(\'' + esc(o.pid) + '\',\'' + x.date + '\',\'' + esc(o.name) + '\')">取消</button></span>';
+      }).join('') + '</div>';
+    });
+    h += '</details>';
+  });
+  h += '</div></div>';
+  $('main').innerHTML = h;
+}
+
+async function refreshSheet() {
+  var w = window.open('', '_blank');
+  try {
+    toast('更新中…');
+    var r = await api('adminRefresh', { weekStart: weekStart });
+    if (w) w.location = r.url; else location.href = r.url;
+  } catch (e) { if (w) w.close(); toast(e.message); }
+}
+
+async function proxyCancel(pid, date, name) {
+  if (!confirm('取消 ' + name + ' ' + md(date) + ' 的餐？')) return;
+  try { await api('adminOrder', { personId: pid, date: date, cancel: true }); toast('已取消'); loadSum(curTab === 'proxy'); }
+  catch (e) { toast(e.message); }
+}
+
+/* ================= 上傳菜單 ================= */
+function renderMenu() {
+  var s = menuState;
+  var nextMon = addDays(monday(ymd(new Date())), 7);
+  if (!s.weekStart) s.weekStart = nextMon;
+  var h = '<div class="panel"><div class="row"><b>1.</b> 菜單是哪一週（週一日期）：' +
+    '<input type="date" id="mWeek" value="' + s.weekStart + '" onchange="setMenuWeek(this.value)">' +
+    '<button class="btn sec" onclick="loadExistingMenu()">載入這週已存的菜單</button></div>' +
+    '<div class="muted" style="margin:-4px 0 10px">Excel 只寫「星期一～五」時，用這個日期換算；Excel 有寫日期就以 Excel 為準。</div>' +
+    '<div class="row"><b>2.</b> 選擇菜單 Excel：<input type="file" id="mFile" accept=".xlsx,.xls,.csv" onchange="readFile(this.files[0])"></div>';
+  if (s.wb && s.wb.SheetNames.length > 1) {
+    h += '<div class="row">工作表：<select onchange="reparse(this.value)">' + s.wb.SheetNames.map(function (n) {
+      return '<option ' + (n === s.sheet ? 'selected' : '') + '>' + esc(n) + '</option>'; }).join('') + '</select></div>';
+  }
+  if (s.info) h += s.info;
+  h += '<div class="row" style="margin-top:6px"><b>3.</b> 確認或修改內容（可直接點格子修改；主菜和素食都空白＝不供餐）</div>';
+  h += '<div style="overflow-x:auto"><table class="edit"><tr><th style="width:150px">日期</th><th>主菜</th><th>素食</th><th style="width:70px">供餐</th><th style="width:22%">備註</th><th style="width:60px"></th></tr>';
+  s.rows.forEach(function (r, i) {
+    h += '<tr><td><input type="date" value="' + r.date + '" onchange="editRow(' + i + ',\'date\',this.value)"> ' + (r.date ? dowOf(r.date) : '') + '</td>' +
+      '<td><input type="text" value="' + esc(r.main) + '" oninput="editRow(' + i + ',\'main\',this.value)"></td>' +
+      '<td><input type="text" value="' + esc(r.veg) + '" oninput="editRow(' + i + ',\'veg\',this.value)"></td>' +
+      '<td><input type="checkbox" ' + (r.serve ? 'checked' : '') + ' onchange="editRow(' + i + ',\'serve\',this.checked)"></td>' +
+      '<td><input type="text" value="' + esc(r.note || '') + '" oninput="editRow(' + i + ',\'note\',this.value)"></td>' +
+      '<td><button class="btn warn" onclick="delRow(' + i + ')">刪</button></td></tr>';
+  });
+  h += '</table></div><div class="row" style="margin-top:10px"><button class="btn sec" onclick="addRow()">＋ 新增一天</button>' +
+    '<button class="btn sec" onclick="fillWeek()">補齊週一～週五</button><span style="flex:1"></span>' +
+    '<button class="btn" onclick="saveMenu(false)" ' + (s.rows.length ? '' : 'disabled') + '>儲存菜單</button></div>' +
+    '<div class="muted">儲存後學生就看得到、可以訂餐。「刪」只是不在這次儲存，不會刪掉已存的菜單；要停餐請取消「供餐」勾選。</div></div>';
+  $('main').innerHTML = h;
+}
+
+function setMenuWeek(v) {
+  if (!v) return;
+  menuState.weekStart = monday(v);
+  if (menuState.wb) reparse(menuState.sheet); else renderMenu();
+}
+
+async function loadExistingMenu() {
+  try {
+    var r = await api('adminMenuGet', { weekStart: menuState.weekStart });
+    menuState.rows = r.rows.map(function (x) { return { date: x.date, main: x.main, veg: x.veg, serve: x.serve, note: x.note }; });
+    menuState.wb = null; menuState.file = null;
+    menuState.info = '<div class="msg">' + (r.rows.length ? '已載入 ' + r.rows.length + ' 天的菜單，可直接修改後儲存。' : '這週還沒有存菜單。') + '</div>';
+    renderMenu();
+  } catch (e) { toast(e.message); }
+}
+
+function readFile(f) {
+  if (!f) return;
+  var rd = new FileReader();
+  rd.onload = function (ev) {
+    try {
+      var buf = new Uint8Array(ev.target.result);
+      menuState.file = { name: f.name, type: f.type, buf: buf };
+      menuState.wb = XLSX.read(buf, { type: 'array', cellDates: true });
+      reparse(null);
+    } catch (e) {
+      menuState.info = '<div class="msg err">讀不到這個檔案：' + esc(e.message) + '</div>'; renderMenu();
+    }
+  };
+  rd.readAsArrayBuffer(f);
+}
+
+function reparse(sheet) {
+  var s = menuState;
+  var r = MenuParser.parseMenuWorkbook(s.wb, s.weekStart, sheet || null, XLSX);
+  s.sheet = r.sheet;
+  if (!r.ok) {
+    s.info = '<div class="msg err">' + esc(r.message) + '</div>';
+    s.rows = [];
+  } else {
+    s.rows = r.days.map(function (d) { return { date: d.date, main: d.main, veg: d.veg, serve: d.serve, note: '' }; });
+    var outside = s.rows.filter(function (x) { return x.date < s.weekStart || x.date > addDays(s.weekStart, 6); }).length;
+    s.info = '<div class="msg ok">從「' + esc(r.sheet) + '」工作表（' + r.layout + '）讀到 ' + r.days.length + ' 天，請核對下面的內容。</div>' +
+      (r.warnings.length ? '<div class="msg warn">' + r.warnings.map(esc).join('<br>') + '</div>' : '') +
+      (outside ? '<div class="msg warn">有 ' + outside + ' 天不在所選的週，請確認 Excel 的日期是否正確。</div>' : '');
+  }
+  renderMenu();
+}
+
+function editRow(i, k, v) { menuState.rows[i][k] = v; if (k === 'date') renderMenu(); }
+function delRow(i) { menuState.rows.splice(i, 1); renderMenu(); }
+function addRow() {
+  var last = menuState.rows.length ? menuState.rows[menuState.rows.length - 1].date : addDays(menuState.weekStart, -1);
+  menuState.rows.push({ date: addDays(last, 1), main: '', veg: '', serve: true, note: '' }); renderMenu();
+}
+function fillWeek() {
+  for (var i = 0; i < 5; i++) {
+    var d = addDays(menuState.weekStart, i);
+    if (!menuState.rows.some(function (r) { return r.date === d; })) menuState.rows.push({ date: d, main: '', veg: '', serve: false, note: '' });
+  }
+  menuState.rows.sort(function (a, b) { return a.date < b.date ? -1 : 1; }); renderMenu();
+}
+
+function toB64(u8) {
+  var s = '', CH = 0x8000;
+  for (var i = 0; i < u8.length; i += CH) s += String.fromCharCode.apply(null, u8.subarray(i, i + CH));
+  return btoa(s);
+}
+
+async function saveMenu(force) {
+  var s = menuState;
+  var dates = s.rows.map(function (r) { return r.date; });
+  if (dates.some(function (d) { return !d; })) { toast('有日期沒填'); return; }
+  if (dates.length !== new Set(dates).size) { toast('有重複的日期'); return; }
+  var payload = { rows: s.rows.map(function (r) {
+    return { date: r.date, main: r.main, veg: r.veg, serve: !!r.serve && !!((r.main || '').trim() || (r.veg || '').trim()), note: r.note };
+  }), force: force };
+  if (s.file && s.file.buf.length < 8 * 1024 * 1024) {
+    payload.fileName = s.file.name; payload.mimeType = s.file.type; payload.fileBase64 = toB64(s.file.buf);
+  }
+  try {
+    toast('儲存中…');
+    var r = await api('adminSaveMenu', payload);
+    if (r.needConfirm) {
+      var t = r.conflicts.map(function (c) { return md(c.date) + '：' + c.kind + '，會取消 ' + c.n + ' 份已訂的餐'; }).join('\n');
+      if (confirm('以下日期已經有人訂餐：\n' + t + '\n\n確定要儲存嗎？')) return saveMenu(true);
+      return;
+    }
+    s.file = null;
+    s.info = '<div class="msg ok">已儲存 ' + r.saved + ' 天' + (r.cancelled ? '，並取消 ' + r.cancelled + ' 份受影響的訂單' : '') + '。' +
+      (r.fileUrl ? ' <a href="' + esc(r.fileUrl) + '" target="_blank">原始檔已存到雲端硬碟</a>' : '') + '</div>';
+    renderMenu();
+    toast('菜單已儲存');
+  } catch (e) { toast(e.message); }
+}
+
+/* ================= 代訂 ================= */
+function moveProxy(n) { weekStart = addDays(weekStart, n); loadSum(true); }
+
+function renderProxy() {
+  var d = sumData;
+  var days = d.days.filter(function (x) { return x.menu && x.menu.serve; });
+  if (!days.some(function (x) { return x.date === proxy.date; })) proxy.date = days.length ? days[0].date : '';
+  var day = days.filter(function (x) { return x.date === proxy.date; })[0];
+  if (day && !day.menu.veg && proxy.type === '素食') proxy.type = '葷食';
+  var h = weekNav('moveProxy') + '<div class="panel">';
+  if (!days.length) { $('main').innerHTML = h + '<div class="msg">這週沒有供餐的日子（請先上傳菜單）。</div></div>'; return; }
+  h += '<div class="muted" style="margin-bottom:10px">管理者代訂、代取消不受截止時間限制。</div>';
+  h += '<div class="row">人員：<select id="pSel" onchange="proxy.pid=this.value;renderProxy()"><option value="">— 請選擇 —</option>' +
+    d.people.map(function (p) { return '<option value="' + esc(p.id) + '" ' + (p.id === proxy.pid ? 'selected' : '') + '>' + esc(p.name + '（' + p.id + '）') + '</option>'; }).join('') + '</select></div>';
+  h += '<div class="row">日期：<select onchange="proxy.date=this.value;renderProxy()">' + days.map(function (x) {
+    return '<option value="' + x.date + '" ' + (x.date === proxy.date ? 'selected' : '') + '>' + md(x.date) + '（' + x.dow + '）' + esc(x.menu.main) + '</option>'; }).join('') + '</select></div>';
+  h += '<div class="row">餐別：' + segP('type', ['葷食', '素食'], day && day.menu.veg ? [] : ['素食']) + '　飯：' + segP('rice', ['白飯', '五穀飯']) + '</div>';
+  var cur = day && proxy.pid ? day.list.filter(function (o) { return o.pid === proxy.pid; })[0] : null;
+  if (proxy.pid) h += '<div class="msg">' + (cur ? '目前已訂：' + esc(cur.type + '・' + cur.rice) : '這天目前沒有訂') + '</div>';
+  h += '<div class="row"><button class="btn" ' + (proxy.pid ? '' : 'disabled') + ' onclick="proxyOrder()">代訂／修改</button>' +
+    '<button class="btn sec" ' + (proxy.pid && cur ? '' : 'disabled') + ' onclick="proxyCancelCur()">代取消</button></div></div>';
+  $('main').innerHTML = h;
+}
+function segP(k, opts, dis) {
+  return '<span class="seg">' + opts.map(function (o) {
+    return '<button ' + (dis && dis.indexOf(o) >= 0 ? 'disabled ' : '') + 'class="' + (proxy[k] === o ? 'on' : '') + '" onclick="proxy.' + k + '=\'' + o + '\';renderProxy()">' + o + '</button>';
+  }).join('') + '</span>';
+}
+async function proxyOrder() {
+  try { await api('adminOrder', { personId: proxy.pid, date: proxy.date, type: proxy.type, rice: proxy.rice }); toast('已代訂'); loadSum(true); }
+  catch (e) { toast(e.message); }
+}
+async function proxyCancelCur() {
+  try { await api('adminOrder', { personId: proxy.pid, date: proxy.date, cancel: true }); toast('已代取消'); loadSum(true); }
+  catch (e) { toast(e.message); }
+}
+
+start();
+</script>
+</body>
+</html>
