@@ -92,18 +92,20 @@ async function api(action, data) {
   var res = await fetch(MEAL_API, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) });
   var j = await res.json();
   if (!j.ok) {
-    if (j.code === 'LOGIN') { relogin(); throw new Error('重新登入中…'); }
+    if (j.code === 'LOGIN' && relogin()) throw new Error('重新登入中…');
     var e = new Error(j.error || '發生錯誤'); e.code = j.code; throw e;
   }
   return j.data;
 }
 
 function relogin() {
+  // 最多自動重新登入 2 次，避免一直轉圈；超過就把原因顯示出來
   var n = +(sessionStorage.getItem('relogin') || 0);
-  if (n >= 2) { showErr('登入失敗，請關閉後重新開啟。'); return; }
+  if (n >= 2) { sessionStorage.removeItem('relogin'); return false; }
   sessionStorage.setItem('relogin', n + 1);
   try { liff.logout(); } catch (e) {}
   liff.login({ redirectUri: location.href });
+  return true;
 }
 
 function showErr(t) { $('main').innerHTML = '<div class="msg err">' + esc(t) + '</div>'; }
