@@ -1,6 +1,8 @@
 /* =========================================================
  * 菜單 Excel 解析器（瀏覽器端，需先載入 SheetJS xlsx.full.min.js）
- * 自動找出：日期／星期、主菜（葷）、素食
+ * 自動找出：日期／星期、主菜一、主菜二、素食主菜
+ * 會合併同一個檔案的多個工作表（例如「主菜二選一」＋「素便當」），
+ * 名稱含「值班」「外包」的工作表略過。
  * 支援兩種排法：
  *   A. 日期在同一列橫排（星期一～星期五），左邊第一欄是「主菜、副菜、素食…」
  *   B. 日期在同一欄直排，上方標題列是「日期、星期、主菜、素食…」
@@ -92,13 +94,14 @@
       veg: /素/.test(n),
       meat: /葷/.test(n),
       main: /主菜|主餐|主菜色|^主$|^葷$|^葷食$|^素$|^素食$|^素食餐$|^素菜$/.test(n),
+      num: /主菜[（(]?(二|2|B|Ｂ)/i.test(n) ? 2 : /主菜[（(]?(一|1|A|Ａ)/i.test(n) ? 1 : 0,
       side: /副菜|配菜|青菜|蔬菜|湯|水果|點心|飲料|甜點|主食|飯|麵/.test(n) && !/主菜/.test(n),
       meal: /早餐/.test(n) ? '早' : /晚餐/.test(n) ? '晚' : /(午餐|中餐)/.test(n) ? '午' : null
     };
   }
 
   /* 在一個方向的表格裡找菜單 */
-  function scanGrid(grid) {
+  function scanGrid(grid, sheetVeg) {
     var blocks = [];
     var cur = null;
     for (var r = 0; r < grid.length; r++) {
@@ -134,7 +137,7 @@
     blocks.forEach(function (b) {
       var firstCol = Math.min.apply(null, b.cols.map(function (x) { return x.c; }));
       var dayCols = b.cols.map(function (x) { return x.c; });
-      var section = 'meat', meal = null;
+      var section = sheetVeg ? 'veg' : 'meat', meal = null;
       var days = b.cols.map(function (x) { return { info: x.info, c: x.c, cand: {} }; });
 
       function put(day, key, val, pri, mealKey) {
@@ -174,10 +177,10 @@
           if (cl.main) { kind = 'veg'; pri = /主/.test(norm(label)) ? 3 : 2; }
         } else if (cl.meat) {
           section = 'meat';
-          if (cl.main || !cl.side) { kind = 'main'; pri = 3; }
+          if (cl.main || !cl.side) { kind = cl.num === 2 ? 'main2' : 'main1'; pri = 3; }
         } else if (cl.main) {
-          kind = section === 'veg' ? 'veg' : 'main';
-          pri = 3;
+          if (section === 'veg') { kind = 'veg'; pri = 3; }
+          else { kind = cl.num === 2 ? 'main2' : 'main1'; pri = cl.num ? 3 : 2; }
         }
 
         days.forEach(function (d, i) {
@@ -186,9 +189,11 @@
           if (kind) put(d, kind, v, pri, meal);
           // 同一格寫「主菜：xxx」「素食：xxx」
           var raw = String(row[d.c] == null ? '' : row[d.c]);
-          var m1 = raw.match(/(?:葷食)?主菜\s*[:：]\s*([^\n\r]+)/);
+          var m1 = raw.match(/(?:葷食)?主菜\s*[（(]?(?:一|1|A)?[)）]?\s*[:：]\s*([^\n\r]+)/);
+          var m3 = raw.match(/主菜\s*[（(]?(?:二|2|B)[)）]?\s*[:：]\s*([^\n\r]+)/);
           var m2 = raw.match(/素(?:食)?(?:主菜)?\s*[:：]\s*([^\n\r]+)/);
-          if (m1 && !/素/.test(raw.slice(Math.max(0, m1.index - 2), m1.index))) put(d, 'main', m1[1], 1, meal);
+          if (m1 && !/素/.test(raw.slice(Math.max(0, m1.index - 2), m1.index))) put(d, sheetVeg ? 'veg' : 'main1', m1[1], 1, meal);
+          if (m3 && !sheetVeg) put(d, 'main2', m3[1], 1, meal);
           if (m2) put(d, 'veg', m2[1], 1, meal);
         });
       });
@@ -198,8 +203,8 @@
         var meals = {};
         Object.keys(d.cand).forEach(function (k) { meals[k.split('|')[0]] = 1; });
         var pick = meals['午'] ? '午' : meals['-'] ? '-' : Object.keys(meals)[0];
-        var main = d.cand[pick + '|main'], veg = d.cand[pick + '|veg'];
-        results.push({ info: d.info, block: blocks.indexOf(b), main: main ? main.val : '', veg: veg ? veg.val : '' });
+        function g(k) { var x = d.cand[pick + '|' + k]; return x ? x.val : ''; }
+        results.push({ info: d.info, block: blocks.indexOf(b), main1: g('main1'), main2: g('main2'), veg: g('veg') });
       });
     });
     return { blocks: blocks.length, days: results };
@@ -231,57 +236,69 @@
         date = addDays(ws, d.info.dow - 1 + dowBlocks.indexOf(d.block) * 7);
       }
       if (!date || isNaN(date)) return;
-      out.push({ date: ymd(date), main: d.main, veg: d.veg });
+      out.push({ date: ymd(date), main1: d.main1, main2: d.main2, veg: d.veg });
     });
 
     // 同一天出現多次：保留有資料的
+    return out;
+  }
+
+  function mergeDays(list) {
     var map = {};
-    out.forEach(function (x) {
+    list.forEach(function (x) {
       var o = map[x.date];
-      if (!o) map[x.date] = x;
-      else { if (!o.main && x.main) o.main = x.main; if (!o.veg && x.veg) o.veg = x.veg; }
+      if (!o) map[x.date] = { date: x.date, main1: x.main1, main2: x.main2, veg: x.veg };
+      else ['main1', 'main2', 'veg'].forEach(function (k) { if (!o[k] && x[k]) o[k] = x[k]; });
     });
     return Object.keys(map).sort().map(function (k) {
       var x = map[k];
       var dow = (parseYmd(k).getDay() + 6) % 7;
-      return { date: k, dow: '一二三四五六日'[dow], main: x.main, veg: x.veg, serve: !!(x.main || x.veg) };
+      return { date: k, dow: '一二三四五六日'[dow], main1: x.main1, main2: x.main2, veg: x.veg, serve: !!(x.main1 || x.main2 || x.veg) };
     });
   }
 
   function score(res) {
-    return res.days.reduce(function (s, d) { return s + (d.main ? 2 : 0) + (d.veg ? 1 : 0); }, 0);
+    return res.days.reduce(function (s, d) { return s + (d.main1 ? 2 : 0) + (d.main2 ? 1 : 0) + (d.veg ? 1 : 0); }, 0);
   }
 
   /**
-   * 解析整個活頁簿
+   * 解析整個活頁簿：每個工作表各自找出最佳排法，再把同一天的資料合併
    * @param wb SheetJS workbook（請用 {cellDates:true} 讀取）
-   * @param weekStart 'yyyy-MM-dd' 週一日期（Excel 只寫星期幾時用來換算）
-   * @param sheetName 指定工作表（可省略，自動挑分數最高的）
+   * @param weekStart 'yyyy-MM-dd' 週一日期（Excel 只寫星期幾、沒寫年份時用來換算）
    */
-  function parseMenuWorkbook(wb, weekStart, sheetName, XLSX) {
+  function parseMenuWorkbook(wb, weekStart, XLSX) {
     XLSX = XLSX || root.XLSX;
-    var best = null;
-    var names = sheetName ? [sheetName] : wb.SheetNames;
-    names.forEach(function (name) {
+    var used = [], all = [];
+    wb.SheetNames.forEach(function (name) {
+      if (/值班|外包|誤餐/.test(name)) return;
       var grid = sheetGrid(wb.Sheets[name], XLSX);
       if (!grid.length) return;
+      var veg = /素/.test(name) || /^素/.test(norm((grid[0] || [])[0]));
+      var best = null;
       [['橫排', grid], ['直排', transpose(grid)]].forEach(function (pair) {
-        var res = scanGrid(pair[1]);
+        var res = scanGrid(pair[1], veg);
         var sc = score(res);
-        if (!best || sc > best.score) best = { score: sc, sheet: name, layout: pair[0], res: res };
+        if (!best || sc > best.score) best = { score: sc, layout: pair[0], res: res };
       });
+      if (best && best.score > 0) {
+        used.push(name);
+        all = all.concat(resolveDates(best.res.days, weekStart));
+      }
     });
-    if (!best || best.score === 0) {
-      return { ok: false, sheet: best ? best.sheet : '', sheets: wb.SheetNames, days: [],
-        message: '找不到日期與主菜。請確認 Excel 裡有「星期一～五」或日期，以及「主菜」「素食」的標題；也可以在下方表格手動輸入。' };
+    if (!all.length) {
+      return { ok: false, sheets: used, days: [],
+        message: '找不到日期與主菜。請確認 Excel 裡有日期或「星期一～五」，以及「主菜一」「主菜二」「主菜」等標題；也可以在下方表格手動輸入。' };
     }
-    var days = resolveDates(best.res.days, weekStart);
+    var days = mergeDays(all);
     var warn = [];
     days.forEach(function (d) {
-      if (!d.main) warn.push(d.date + ' 沒找到主菜');
-      if (d.main && !d.veg) warn.push(d.date + ' 沒找到素食');
+      var miss = [];
+      if (!d.main1) miss.push('主菜一');
+      if (!d.main2) miss.push('主菜二');
+      if (!d.veg) miss.push('素食');
+      if (miss.length && d.serve) warn.push(d.date + ' 沒找到' + miss.join('、'));
     });
-    return { ok: true, sheet: best.sheet, sheets: wb.SheetNames, layout: best.layout, days: days, warnings: warn };
+    return { ok: true, sheets: used, days: days, warnings: warn };
   }
 
   var api = { parseMenuWorkbook: parseMenuWorkbook, dayInfo: dayInfo };

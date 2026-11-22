@@ -80,8 +80,10 @@
 var idToken = '', me = null;
 var weekStart = '';
 var sumData = null;
-var menuState = { wb: null, file: null, sheet: '', rows: [], info: '' };
-var proxy = { pid: '', date: '', type: '葷食', rice: '白飯' };
+var menuState = { wb: null, file: null, rows: [], info: '' };
+var proxy = { pid: '', date: '', type: '主菜一', rice: '白飯' };
+var TYPES = ['主菜一', '主菜二', '素食'], KEY = { '主菜一': 'main1', '主菜二': 'main2', '素食': 'veg' };
+var COMBOS = ['主菜一|白飯', '主菜一|五穀飯', '主菜二|白飯', '主菜二|五穀飯', '素食|白飯', '素食|五穀飯'];
 var curTab = 'sum';
 
 function $(id) { return document.getElementById(id); }
@@ -165,30 +167,35 @@ function renderSum() {
     '<button class="btn sec" onclick="window.print()">列印</button>' +
     '<span class="muted">總表試算表是另一個獨立檔案，可以單獨共用給營養室或其他管理者。</span></div>';
   h += '<h3 style="margin:6px 0 10px">訂餐總表 ' + md(d.weekStart) + ' – ' + md(addDays(d.weekStart, 4)) + '</h3>';
-  h += '<div style="overflow-x:auto"><table><tr><th>日期</th><th>主菜</th><th>素食</th><th>葷・白飯</th><th>葷・五穀</th><th>素・白飯</th><th>素・五穀</th><th>葷合計</th><th>素合計</th><th>總份數</th>' +
-    (isNaN(price) ? '' : '<th>金額</th>') + '<th class="noprint">截止</th></tr>';
-  var tot = [0, 0, 0, 0, 0, 0, 0];
+  h += '<div style="overflow-x:auto"><table><tr><th rowspan="2">日期</th><th rowspan="2">主菜一</th><th rowspan="2">主菜二</th><th rowspan="2">素食</th>' +
+    '<th colspan="2">主菜一</th><th colspan="2">主菜二</th><th colspan="2">素食</th><th colspan="2">飯</th><th rowspan="2">總份數</th>' +
+    (isNaN(price) ? '' : '<th rowspan="2">金額</th>') + '<th rowspan="2" class="noprint">截止</th></tr>' +
+    '<tr><th>白飯</th><th>五穀</th><th>白飯</th><th>五穀</th><th>白飯</th><th>五穀</th><th>白飯</th><th>五穀</th></tr>';
+  var tot = [0, 0, 0, 0, 0, 0, 0, 0, 0];
   d.days.forEach(function (x) {
-    var c = x.counts, a = [c['葷食|白飯'], c['葷食|五穀飯'], c['素食|白飯'], c['素食|五穀飯']];
-    var v = a.concat([a[0] + a[1], a[2] + a[3], x.total]);
+    var a = COMBOS.map(function (k) { return x.counts[k] || 0; });
+    var v = a.concat([a[0] + a[2] + a[4], a[1] + a[3] + a[5], x.total]);
     v.forEach(function (n, i) { tot[i] += n; });
-    var menuTxt = x.menu ? (x.menu.serve ? esc(x.menu.main) : '<span class="muted">不供餐</span>') : '<span class="muted">未上傳菜單</span>';
-    h += '<tr><td>' + md(x.date) + '（' + x.dow + '）</td><td class="l">' + menuTxt + '</td><td class="l">' + (x.menu && x.menu.serve ? esc(x.menu.veg) : '') + '</td>' +
+    var m = x.menu, sv = m && m.serve;
+    var first = m ? (sv ? esc(m.main1) : '<span class="muted">不供餐</span>') : '<span class="muted">未上傳菜單</span>';
+    h += '<tr><td>' + md(x.date) + '（' + x.dow + '）</td><td class="l">' + first + '</td><td class="l">' + (sv ? esc(m.main2) : '') +
+      '</td><td class="l">' + (sv ? esc(m.veg) : '') + '</td>' +
       v.map(function (n) { return '<td class="num">' + n + '</td>'; }).join('') +
       (isNaN(price) ? '' : '<td class="num">' + (x.total * price) + '</td>') +
       '<td class="noprint muted">' + esc(x.cutoff) + '</td></tr>';
   });
-  h += '<tr class="tot"><td>合計</td><td></td><td></td>' + tot.map(function (n) { return '<td class="num">' + n + '</td>'; }).join('') +
-    (isNaN(price) ? '' : '<td class="num">' + (tot[6] * price) + '</td>') + '<td class="noprint"></td></tr></table></div>';
+  h += '<tr class="tot"><td>合計</td><td></td><td></td><td></td>' + tot.map(function (n) { return '<td class="num">' + n + '</td>'; }).join('') +
+    (isNaN(price) ? '' : '<td class="num">' + (tot[8] * price) + '</td>') + '<td class="noprint"></td></tr></table></div>';
 
   h += '<h3 style="margin:16px 0 8px">每日名單</h3><div class="daylist">';
   d.days.forEach(function (x) {
     if (!x.list.length) { h += '<details><summary>' + md(x.date) + '（' + x.dow + '）　0 份</summary><div class="muted">沒有人訂</div></details>'; return; }
     h += '<details open><summary>' + md(x.date) + '（' + x.dow + '）　' + x.total + ' 份</summary>';
-    ['葷食|白飯', '葷食|五穀飯', '素食|白飯', '素食|五穀飯'].forEach(function (k) {
+    COMBOS.forEach(function (k) {
       var ls = x.list.filter(function (o) { return o.type + '|' + o.rice === k; });
       if (!ls.length) return;
-      h += '<div style="margin-top:6px"><b>' + k.replace('|', '・') + '（' + ls.length + '）</b><br>' + ls.map(function (o) {
+      var dish = x.menu ? x.menu[KEY[k.split('|')[0]]] || '' : '';
+      h += '<div style="margin-top:6px"><b>' + k.replace('|', '・') + '</b> <span class="muted">' + esc(dish) + '</span> <b>（' + ls.length + '）</b><br>' + ls.map(function (o) {
         return '<span class="chip">' + esc(o.name) + (o.by && o.by !== '本人' ? '<span class="t">代訂</span>' : '') +
           '<button class="btn warn noprint" onclick="proxyCancel(\'' + esc(o.pid) + '\',\'' + x.date + '\',\'' + esc(o.name) + '\')">取消</button></span>';
       }).join('') + '</div>';
@@ -224,17 +231,14 @@ function renderMenu() {
     '<button class="btn sec" onclick="loadExistingMenu()">載入這週已存的菜單</button></div>' +
     '<div class="muted" style="margin:-4px 0 10px">Excel 只寫「星期一～五」時，用這個日期換算；Excel 有寫日期就以 Excel 為準。</div>' +
     '<div class="row"><b>2.</b> 選擇菜單 Excel：<input type="file" id="mFile" accept=".xlsx,.xls,.csv" onchange="readFile(this.files[0])"></div>';
-  if (s.wb && s.wb.SheetNames.length > 1) {
-    h += '<div class="row">工作表：<select onchange="reparse(this.value)">' + s.wb.SheetNames.map(function (n) {
-      return '<option ' + (n === s.sheet ? 'selected' : '') + '>' + esc(n) + '</option>'; }).join('') + '</select></div>';
-  }
   if (s.info) h += s.info;
-  h += '<div class="row" style="margin-top:6px"><b>3.</b> 確認或修改內容（可直接點格子修改；主菜和素食都空白＝不供餐）</div>';
-  h += '<div style="overflow-x:auto"><table class="edit"><tr><th style="width:150px">日期</th><th>主菜</th><th>素食</th><th style="width:70px">供餐</th><th style="width:22%">備註</th><th style="width:60px"></th></tr>';
+  h += '<div class="row" style="margin-top:6px"><b>3.</b> 確認或修改內容（可直接點格子修改；三道主菜都空白＝不供餐）</div>';
+  h += '<div style="overflow-x:auto"><table class="edit"><tr><th style="width:150px">日期</th><th>主菜一</th><th>主菜二</th><th>素食</th><th style="width:60px">供餐</th><th style="width:16%">備註</th><th style="width:56px"></th></tr>';
   s.rows.forEach(function (r, i) {
     h += '<tr><td><input type="date" value="' + r.date + '" onchange="editRow(' + i + ',\'date\',this.value)"> ' + (r.date ? dowOf(r.date) : '') + '</td>' +
-      '<td><input type="text" value="' + esc(r.main) + '" oninput="editRow(' + i + ',\'main\',this.value)"></td>' +
-      '<td><input type="text" value="' + esc(r.veg) + '" oninput="editRow(' + i + ',\'veg\',this.value)"></td>' +
+      ['main1', 'main2', 'veg'].map(function (k) {
+        return '<td><input type="text" value="' + esc(r[k]) + '" oninput="editRow(' + i + ',\'' + k + '\',this.value)"></td>';
+      }).join('') +
       '<td><input type="checkbox" ' + (r.serve ? 'checked' : '') + ' onchange="editRow(' + i + ',\'serve\',this.checked)"></td>' +
       '<td><input type="text" value="' + esc(r.note || '') + '" oninput="editRow(' + i + ',\'note\',this.value)"></td>' +
       '<td><button class="btn warn" onclick="delRow(' + i + ')">刪</button></td></tr>';
@@ -249,13 +253,13 @@ function renderMenu() {
 function setMenuWeek(v) {
   if (!v) return;
   menuState.weekStart = monday(v);
-  if (menuState.wb) reparse(menuState.sheet); else renderMenu();
+  if (menuState.wb) reparse(); else renderMenu();
 }
 
 async function loadExistingMenu() {
   try {
     var r = await api('adminMenuGet', { weekStart: menuState.weekStart });
-    menuState.rows = r.rows.map(function (x) { return { date: x.date, main: x.main, veg: x.veg, serve: x.serve, note: x.note }; });
+    menuState.rows = r.rows.map(function (x) { return { date: x.date, main1: x.main1, main2: x.main2, veg: x.veg, serve: x.serve, note: x.note }; });
     menuState.wb = null; menuState.file = null;
     menuState.info = '<div class="msg">' + (r.rows.length ? '已載入 ' + r.rows.length + ' 天的菜單，可直接修改後儲存。' : '這週還沒有存菜單。') + '</div>';
     renderMenu();
@@ -270,7 +274,7 @@ function readFile(f) {
       var buf = new Uint8Array(ev.target.result);
       menuState.file = { name: f.name, type: f.type, buf: buf };
       menuState.wb = XLSX.read(buf, { type: 'array', cellDates: true });
-      reparse(null);
+      reparse();
     } catch (e) {
       menuState.info = '<div class="msg err">讀不到這個檔案：' + esc(e.message) + '</div>'; renderMenu();
     }
@@ -278,19 +282,18 @@ function readFile(f) {
   rd.readAsArrayBuffer(f);
 }
 
-function reparse(sheet) {
+function reparse() {
   var s = menuState;
-  var r = MenuParser.parseMenuWorkbook(s.wb, s.weekStart, sheet || null, XLSX);
-  s.sheet = r.sheet;
+  var r = MenuParser.parseMenuWorkbook(s.wb, s.weekStart, XLSX);
   if (!r.ok) {
     s.info = '<div class="msg err">' + esc(r.message) + '</div>';
     s.rows = [];
   } else {
-    s.rows = r.days.map(function (d) { return { date: d.date, main: d.main, veg: d.veg, serve: d.serve, note: '' }; });
+    s.rows = r.days.map(function (d) { return { date: d.date, main1: d.main1, main2: d.main2, veg: d.veg, serve: d.serve, note: '' }; });
     var outside = s.rows.filter(function (x) { return x.date < s.weekStart || x.date > addDays(s.weekStart, 6); }).length;
-    s.info = '<div class="msg ok">從「' + esc(r.sheet) + '」工作表（' + r.layout + '）讀到 ' + r.days.length + ' 天，請核對下面的內容。</div>' +
+    s.info = '<div class="msg ok">從「' + r.sheets.map(esc).join('」「') + '」讀到 ' + r.days.length + ' 天，請核對下面的內容。</div>' +
       (r.warnings.length ? '<div class="msg warn">' + r.warnings.map(esc).join('<br>') + '</div>' : '') +
-      (outside ? '<div class="msg warn">有 ' + outside + ' 天不在所選的週，請確認 Excel 的日期是否正確。</div>' : '');
+      (outside ? '<div class="msg warn">有 ' + outside + ' 天不在所選的週，請確認上方的週一日期或 Excel 的日期。</div>' : '');
   }
   renderMenu();
 }
@@ -299,12 +302,12 @@ function editRow(i, k, v) { menuState.rows[i][k] = v; if (k === 'date') renderMe
 function delRow(i) { menuState.rows.splice(i, 1); renderMenu(); }
 function addRow() {
   var last = menuState.rows.length ? menuState.rows[menuState.rows.length - 1].date : addDays(menuState.weekStart, -1);
-  menuState.rows.push({ date: addDays(last, 1), main: '', veg: '', serve: true, note: '' }); renderMenu();
+  menuState.rows.push({ date: addDays(last, 1), main1: '', main2: '', veg: '', serve: true, note: '' }); renderMenu();
 }
 function fillWeek() {
   for (var i = 0; i < 5; i++) {
     var d = addDays(menuState.weekStart, i);
-    if (!menuState.rows.some(function (r) { return r.date === d; })) menuState.rows.push({ date: d, main: '', veg: '', serve: false, note: '' });
+    if (!menuState.rows.some(function (r) { return r.date === d; })) menuState.rows.push({ date: d, main1: '', main2: '', veg: '', serve: false, note: '' });
   }
   menuState.rows.sort(function (a, b) { return a.date < b.date ? -1 : 1; }); renderMenu();
 }
@@ -321,7 +324,8 @@ async function saveMenu(force) {
   if (dates.some(function (d) { return !d; })) { toast('有日期沒填'); return; }
   if (dates.length !== new Set(dates).size) { toast('有重複的日期'); return; }
   var payload = { rows: s.rows.map(function (r) {
-    return { date: r.date, main: r.main, veg: r.veg, serve: !!r.serve && !!((r.main || '').trim() || (r.veg || '').trim()), note: r.note };
+    var any = ['main1', 'main2', 'veg'].some(function (k) { return (r[k] || '').trim(); });
+    return { date: r.date, main1: r.main1, main2: r.main2, veg: r.veg, serve: !!r.serve && any, note: r.note };
   }), force: force };
   if (s.file && s.file.buf.length < 8 * 1024 * 1024) {
     payload.fileName = s.file.name; payload.mimeType = s.file.type; payload.fileBase64 = toB64(s.file.buf);
@@ -350,15 +354,17 @@ function renderProxy() {
   var days = d.days.filter(function (x) { return x.menu && x.menu.serve; });
   if (!days.some(function (x) { return x.date === proxy.date; })) proxy.date = days.length ? days[0].date : '';
   var day = days.filter(function (x) { return x.date === proxy.date; })[0];
-  if (day && !day.menu.veg && proxy.type === '素食') proxy.type = '葷食';
+  if (day && !day.menu[KEY[proxy.type]]) proxy.type = TYPES.filter(function (t) { return day.menu[KEY[t]]; })[0] || proxy.type;
   var h = weekNav('moveProxy') + '<div class="panel">';
   if (!days.length) { $('main').innerHTML = h + '<div class="msg">這週沒有供餐的日子（請先上傳菜單）。</div></div>'; return; }
   h += '<div class="muted" style="margin-bottom:10px">管理者代訂、代取消不受截止時間限制。</div>';
   h += '<div class="row">人員：<select id="pSel" onchange="proxy.pid=this.value;renderProxy()"><option value="">— 請選擇 —</option>' +
     d.people.map(function (p) { return '<option value="' + esc(p.id) + '" ' + (p.id === proxy.pid ? 'selected' : '') + '>' + esc(p.name + '（' + p.id + '）') + '</option>'; }).join('') + '</select></div>';
   h += '<div class="row">日期：<select onchange="proxy.date=this.value;renderProxy()">' + days.map(function (x) {
-    return '<option value="' + x.date + '" ' + (x.date === proxy.date ? 'selected' : '') + '>' + md(x.date) + '（' + x.dow + '）' + esc(x.menu.main) + '</option>'; }).join('') + '</select></div>';
-  h += '<div class="row">餐別：' + segP('type', ['葷食', '素食'], day && day.menu.veg ? [] : ['素食']) + '　飯：' + segP('rice', ['白飯', '五穀飯']) + '</div>';
+    return '<option value="' + x.date + '" ' + (x.date === proxy.date ? 'selected' : '') + '>' + md(x.date) + '（' + x.dow + '）</option>'; }).join('') + '</select></div>';
+  h += '<div class="row">主菜：' + segP('type', TYPES, TYPES.filter(function (t) { return !day || !day.menu[KEY[t]]; })) +
+    '　<span class="muted">' + esc(day ? day.menu[KEY[proxy.type]] : '') + '</span></div>';
+  h += '<div class="row">飯：' + segP('rice', ['白飯', '五穀飯']) + '</div>';
   var cur = day && proxy.pid ? day.list.filter(function (o) { return o.pid === proxy.pid; })[0] : null;
   if (proxy.pid) h += '<div class="msg">' + (cur ? '目前已訂：' + esc(cur.type + '・' + cur.rice) : '這天目前沒有訂') + '</div>';
   h += '<div class="row"><button class="btn" ' + (proxy.pid ? '' : 'disabled') + ' onclick="proxyOrder()">代訂／修改</button>' +

@@ -32,8 +32,15 @@
   .badge { font-size:13px; padding:3px 9px; border-radius:99px; background:#f3f4f6; color:var(--m); }
   .badge.ok { background:var(--g2); color:var(--g); font-weight:600; }
   .badge.lock { background:var(--o2); color:var(--o); }
-  .dish { margin:8px 0 2px; line-height:1.55; }
-  .dish b { display:inline-block; width:3em; color:var(--m); font-weight:500; }
+  .opts { display:flex; flex-direction:column; gap:6px; margin-top:10px; }
+  .opt { display:flex; gap:10px; align-items:center; text-align:left; border:1px solid var(--b); background:#fff;
+         border-radius:10px; padding:9px 12px; font-size:15.5px; color:var(--t); width:100%; }
+  .opt .k { font-size:12.5px; color:var(--m); min-width:3.6em; }
+  .opt.on { border-color:var(--g); background:var(--g2); box-shadow:0 0 0 1px var(--g) inset; }
+  .opt.on .k { color:var(--g); font-weight:600; }
+  .opt:disabled { display:none; }
+  .dishro { margin:8px 0 2px; line-height:1.6; font-size:15px; }
+  .dishro .k { display:inline-block; width:3.6em; color:var(--m); font-size:13px; }
   .seg { display:inline-flex; border:1px solid var(--b); border-radius:9px; overflow:hidden; }
   .seg button { border:0; background:#fff; padding:8px 13px; font-size:15px; color:var(--t); }
   .seg button + button { border-left:1px solid var(--b); }
@@ -66,8 +73,9 @@
 
 <script>
 var idToken = '', me = null, weekStart = '', weekData = null;
-var pref = { type: '葷食', rice: '白飯' };
-try { var sp = JSON.parse(localStorage.getItem('mealPref') || 'null'); if (sp) pref = sp; } catch (e) {}
+var pref = { type: '主菜一', rice: '白飯' };
+var TYPES = ['主菜一', '主菜二', '素食'], KEY = { '主菜一': 'main1', '主菜二': 'main2', '素食': 'veg' };
+try { var sp = JSON.parse(localStorage.getItem('mealPref') || 'null'); if (sp && TYPES.indexOf(sp.type) >= 0) pref = sp; } catch (e) {}
 var picks = {}; // 每天目前選的 {type, rice}
 
 function $(id) { return document.getElementById(id); }
@@ -127,12 +135,18 @@ async function loadWeek() {
     weekStart = weekData.weekStart;
     picks = {};
     weekData.days.forEach(function (d) {
-      picks[d.date] = d.order ? { type: d.order.type, rice: d.order.rice } : { type: pref.type, rice: pref.rice };
-      if (d.menu && !d.menu.veg && picks[d.date].type === '素食' && !d.order) picks[d.date].type = '葷食';
+      picks[d.date] = d.order ? { type: d.order.type, rice: d.order.rice } : { type: fitType(d.menu, pref.type), rice: pref.rice };
     });
     render();
   } catch (e) { showErr(e.message); }
 }
+
+function fitType(m, t) {
+  if (!m || m[KEY[t]]) return t;
+  for (var i = 0; i < TYPES.length; i++) if (m[KEY[TYPES[i]]]) return TYPES[i];
+  return t;
+}
+function dishOf(m, t) { return m ? m[KEY[t]] || '' : ''; }
 
 function seg(name, opts, val, date, disabledOpts) {
   return '<div class="seg">' + opts.map(function (o) {
@@ -147,14 +161,14 @@ function render() {
     '<span class="label">' + md(w.weekStart) + ' – ' + md(addDays(w.weekStart, 4)) + '</span>' +
     '<button onclick="moveWeek(7)">下週 ›</button></div>';
 
-  var open = w.days.filter(function (d) { return d.menu && d.menu.serve && !d.locked; });
+  var open = w.days.filter(function (d) { return d.menu && d.menu.serve && !d.locked && !d.order; });
   var orderedN = w.days.filter(function (d) { return d.order; }).length;
 
   if (!w.days.some(function (d) { return d.menu; })) {
     html += '<div class="msg">這週的菜單還沒公布。</div>';
   } else if (open.length) {
-    html += '<div class="quick"><div style="font-weight:600;margin-bottom:8px">一鍵訂整週（還沒截止的日子）</div>' +
-      '<div class="row">' + seg('type', ['葷食', '素食'], pref.type, '__all') + seg('rice', ['白飯', '五穀飯'], pref.rice, '__all') + '</div>' +
+    html += '<div class="quick"><div style="font-weight:600;margin-bottom:8px">一鍵訂餐（本週還沒訂、還沒截止的日子）</div>' +
+      '<div class="row">' + seg('type', TYPES, pref.type, '__all') + seg('rice', ['白飯', '五穀飯'], pref.rice, '__all') + '</div>' +
       '<button class="btn" style="width:100%" onclick="orderAll()">全部訂 ' + esc(pref.type + '・' + pref.rice) + '（' + open.length + ' 天）</button></div>';
   }
 
@@ -170,22 +184,25 @@ function render() {
     else html += '<span class="badge">未訂</span>';
     html += '</div>';
 
-    if (m && serve) {
-      html += '<div class="dish"><b>主菜</b>' + esc(m.main || '—') + '<br><b>素食</b>' + esc(m.veg || '（無）') + '</div>';
-      if (m.note) html += '<div class="cut">📝 ' + esc(m.note) + '</div>';
-    } else if (m && m.note) html += '<div class="cut">' + esc(m.note) + '</div>';
-
     if (serve && !d.locked) {
-      html += '<div class="ctrl">' + seg('type', ['葷食', '素食'], p.type, d.date, m.veg ? [] : ['素食']) +
-        seg('rice', ['白飯', '五穀飯'], p.rice, d.date) + '</div>';
+      html += '<div class="opts">' + TYPES.map(function (t) {
+        var dish = dishOf(m, t);
+        return '<button class="opt' + (p.type === t ? ' on' : '') + '" ' + (dish ? '' : 'disabled ') +
+          'onclick="pick(\'' + d.date + '\',\'type\',\'' + t + '\')"><span class="k">' + t + '</span>' + esc(dish) + '</button>';
+      }).join('') + '</div>';
+      html += '<div class="ctrl">' + seg('rice', ['白飯', '五穀飯'], p.rice, d.date) + '</div>';
       var changed = !o || o.type !== p.type || o.rice !== p.rice;
       html += '<div class="acts"><button class="btn" ' + (changed ? '' : 'disabled') + ' onclick="orderOne(\'' + d.date + '\')">' +
-        (o ? (changed ? '改成 ' + esc(p.type + '・' + p.rice) : '已訂') : '訂餐') + '</button>' +
+        (o ? (changed ? '改成 ' + esc(p.type + '・' + p.rice) : '已訂') : '訂 ' + esc(p.type + '・' + p.rice)) + '</button>' +
         (o ? '<button class="btn ghost" onclick="cancelOne(\'' + d.date + '\')">取消訂餐</button>' : '') + '</div>';
       html += '<div class="cut">截止：' + esc(d.cutoff) + '</div>';
     } else if (serve && d.locked) {
+      html += '<div class="dishro">' + TYPES.map(function (t) {
+        return dishOf(m, t) ? '<span class="k">' + t + '</span>' + esc(dishOf(m, t)) : '';
+      }).filter(Boolean).join('<br>') + '</div>';
       html += '<div class="cut">已於 ' + esc(d.cutoff) + ' 截止' + (o ? '' : '，如需補訂請洽管理者') + '</div>';
     }
+    if (m && m.note) html += '<div class="cut">📝 ' + esc(m.note) + '</div>';
     html += '</div>';
   });
   html += '<div class="foot">本週已訂 ' + orderedN + ' 餐</div>';
@@ -216,8 +233,8 @@ async function cancelOne(date) {
 }
 
 async function orderAll() {
-  var items = weekData.days.filter(function (d) { return d.menu && d.menu.serve && !d.locked; }).map(function (d) {
-    var type = pref.type === '素食' && !d.menu.veg ? '葷食' : pref.type;
+  var items = weekData.days.filter(function (d) { return d.menu && d.menu.serve && !d.locked && !d.order; }).map(function (d) {
+    var type = fitType(d.menu, pref.type);
     return { date: d.date, type: type, rice: pref.rice };
   });
   if (!items.length) return;
